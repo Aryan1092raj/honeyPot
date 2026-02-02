@@ -21,9 +21,26 @@ Thumbs.db
 # Logs
 *.log
 
-# Others
+# Database
 *.sqlite3
 *.db
 
-# Git
-.git/
+# Audio cache
+audio_cache/
+recording.wav
+*.wav
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
