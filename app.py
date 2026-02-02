@@ -265,7 +265,7 @@ if 'conversation' not in st.session_state:
 if 'session_id' not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())[:8]
 if 'current_persona' not in st.session_state:
-    st.session_state.current_persona = "Elderly Teacher"
+    st.session_state.current_persona = "Rajesh Kumar"
 if 'all_extracted' not in st.session_state:
     st.session_state.all_extracted = {
         "upi_ids": [], "account_numbers": [],
@@ -327,10 +327,10 @@ with tab1:
     # SIDEBAR
     with st.sidebar:
         st.header("⚙️ Configuration")
-
-        selected_persona = st.selectbox("🎭 AI Persona", list_personas())
-        if selected_persona != st.session_state.current_persona:
-            st.session_state.current_persona = selected_persona
+        
+        # Display current persona (fixed)
+        st.markdown("🎭 **AI Persona:** Rajesh Kumar")
+        st.caption("58-year-old retired bank employee from Mumbai")
 
         if TTS_AVAILABLE:
             st.session_state.voice_enabled = st.toggle("🔊 Voice Mode", value=st.session_state.voice_enabled)
