@@ -257,60 +257,61 @@ async def honeypot_post(
     Main honeypot endpoint - receives scammer message, returns agent response
     
     Requires X-API-Key header for authentication
-    Accepts flexible JSON body formats for hackathon compatibility
+    
+    Expected format from hackathon:
+    {
+        "sessionId": "abc123",
+        "message": {
+            "sender": "scammer",
+            "text": "Your bank account...",
+            "timestamp": 1770005528731
+        },
+        "conversationHistory": [],
+        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+    }
     """
     try:
-        # Parse raw JSON body flexibly
+        # Parse raw JSON body
         try:
             body = await request.json()
         except:
             body = {}
         
-        # Extract fields flexibly (try multiple possible field names)
+        # Extract sessionId
         session_id = (
             body.get("sessionId") or 
             body.get("session_id") or 
-            body.get("session") or 
-            body.get("id") or 
             f"auto-{uuid.uuid4().hex[:8]}"
         )
         
-        message = (
-            body.get("message") or 
-            body.get("msg") or 
-            body.get("text") or 
-            body.get("content") or 
-            body.get("input") or 
-            body.get("scammer_message") or
-            body.get("scammerMessage") or
-            ""
-        )
+        # Extract message - handle both object format and string format
+        message_field = body.get("message") or body.get("msg") or body.get("text") or ""
         
+        # If message is an object (hackathon format), extract the text field
+        if isinstance(message_field, dict):
+            message = message_field.get("text") or message_field.get("content") or ""
+            sender = message_field.get("sender") or "scammer"
+        else:
+            # Plain string format
+            message = str(message_field) if message_field else ""
+            sender = "scammer"
+        
+        # Extract conversation history
         conversation_history = (
             body.get("conversationHistory") or 
             body.get("conversation_history") or 
             body.get("history") or 
-            body.get("messages") or
             []
         )
         
-        # Handle test requests with no message
+        # Extract metadata
+        metadata = body.get("metadata") or {}
+        
+        # Handle test requests with no message - return simple format
         if not message or not message.strip():
             return {
                 "status": "success",
-                "reply": "Hello! This is ScamBait AI honeypot. Ready to engage scammers.",
-                "sessionId": session_id,
-                "scamDetected": False,
-                "extractedIntelligence": {
-                    "upiIds": [],
-                    "bankAccounts": [],
-                    "ifscCodes": [],
-                    "phoneNumbers": [],
-                    "phishingLinks": []
-                },
-                "agentStrategy": "READY",
-                "currentPhase": "initialization",
-                "messageCount": 0
+                "reply": "Hello! This is ScamBait AI honeypot. Ready to engage scammers."
             }
         
         # Validate message length
@@ -384,29 +385,18 @@ async def honeypot_post(
             # Clean up session after callback
             background_tasks.add_task(lambda: sessions.pop(session_id, None))
         
-        # Build response as dict (flexible format)
+        # Build response - hackathon expects simple format: status + reply
         return {
             "status": "success",
-            "reply": result["response"],
-            "sessionId": session_id,
-            "scamDetected": session["scam_detected"],
-            "extractedIntelligence": {
-                "upiIds": session["extracted_data"]["upi_ids"],
-                "bankAccounts": session["extracted_data"]["account_numbers"],
-                "ifscCodes": session["extracted_data"]["ifsc_codes"],
-                "phoneNumbers": session["extracted_data"]["phone_numbers"],
-                "phishingLinks": session["extracted_data"]["links"]
-            },
-            "agentStrategy": result["strategy"].get("strategy", ""),
-            "currentPhase": result["strategy"].get("new_phase", ""),
-            "messageCount": session["message_count"]
+            "reply": result["response"]
         }
         
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        # Return error in expected format
+        return {
+            "status": "error",
+            "message": f"Internal server error: {str(e)}"
+        }
 
 @app.post("/api/honeypot/end-session")
 async def end_session(sessionId: str, background_tasks: BackgroundTasks):
