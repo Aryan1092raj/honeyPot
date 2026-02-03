@@ -3,7 +3,7 @@ ScamBait AI - FastAPI Backend
 Hackathon-compliant API endpoint that wraps existing agent logic
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Dict
@@ -248,48 +248,90 @@ async def honeypot_get():
         }
     }
 
-@app.post("/api/honeypot", response_model=HoneypotResponse, dependencies=[Depends(verify_api_key)])
+@app.post("/api/honeypot", dependencies=[Depends(verify_api_key)])
 async def honeypot_post(
-    request: HoneypotRequest,
+    request: Request,
     background_tasks: BackgroundTasks
 ):
     """
     Main honeypot endpoint - receives scammer message, returns agent response
     
     Requires X-API-Key header for authentication
+    Accepts flexible JSON body formats for hackathon compatibility
     """
     try:
-        # Handle test requests with no message
-        if not request.message or not request.message.strip():
-            return HoneypotResponse(
-                status="success",
-                reply="Hello! This is ScamBait AI honeypot. Please send a scam message to test the system.",
-                sessionId=request.sessionId,
-                scamDetected=False,
-                extractedIntelligence=ExtractedIntelligence(),
-                agentStrategy="TEST",
-                currentPhase="initialization",
-                messageCount=0
-            )
+        # Parse raw JSON body flexibly
+        try:
+            body = await request.json()
+        except:
+            body = {}
         
-        # Validate message
-        validate_message_length(request.message)
+        # Extract fields flexibly (try multiple possible field names)
+        session_id = (
+            body.get("sessionId") or 
+            body.get("session_id") or 
+            body.get("session") or 
+            body.get("id") or 
+            f"auto-{uuid.uuid4().hex[:8]}"
+        )
+        
+        message = (
+            body.get("message") or 
+            body.get("msg") or 
+            body.get("text") or 
+            body.get("content") or 
+            body.get("input") or 
+            body.get("scammer_message") or
+            body.get("scammerMessage") or
+            ""
+        )
+        
+        conversation_history = (
+            body.get("conversationHistory") or 
+            body.get("conversation_history") or 
+            body.get("history") or 
+            body.get("messages") or
+            []
+        )
+        
+        # Handle test requests with no message
+        if not message or not message.strip():
+            return {
+                "status": "success",
+                "reply": "Hello! This is ScamBait AI honeypot. Ready to engage scammers.",
+                "sessionId": session_id,
+                "scamDetected": False,
+                "extractedIntelligence": {
+                    "upiIds": [],
+                    "bankAccounts": [],
+                    "ifscCodes": [],
+                    "phoneNumbers": [],
+                    "phishingLinks": []
+                },
+                "agentStrategy": "READY",
+                "currentPhase": "initialization",
+                "messageCount": 0
+            }
+        
+        # Validate message length
+        if len(message) > 5000:
+            message = message[:5000]
         
         # Get or create session
-        session = get_session(request.sessionId)
+        session = get_session(session_id)
         agent = session["agent"]
         
         # Load conversation history from request if provided, otherwise use session history
-        if request.conversationHistory and len(request.conversationHistory) > 0:
+        if conversation_history and len(conversation_history) > 0:
             # Use provided history (for external callers)
-            agent.conversation_history = request.conversationHistory
+            agent.conversation_history = conversation_history
         else:
             # Use session's internal history
             agent.conversation_history = session.get("conversation_history", [])
         
         # Process scammer message with agentic logic
         result = agent.process(
-            request.message,
+            message,
             get_persona(session["persona"])
         )
         
@@ -297,7 +339,7 @@ async def honeypot_post(
         session["conversation_history"] = agent.conversation_history
         
         # Extract intelligence
-        extraction = extractor.get_summary(request.message)
+        extraction = extractor.get_summary(message)
         
         # Update session data
         session["message_count"] += 1
@@ -312,7 +354,7 @@ async def honeypot_post(
         # Log conversation
         session["conversation"].append({
             "timestamp": datetime.now().isoformat(),
-            "scammer": request.message,
+            "scammer": message,
             "agent": result["response"],
             "strategy": result["strategy"].get("strategy", ""),
             "phase": result["strategy"].get("new_phase", ""),
@@ -321,9 +363,9 @@ async def honeypot_post(
         
         # Database logging
         db.log_conversation(
-            session_id=request.sessionId,
+            session_id=session_id,
             persona=session["persona"],
-            scammer_message=request.message,
+            scammer_message=message,
             agent_response=result["response"],
             strategy=result["strategy"],
             extracted_data=extraction["extracted"],
@@ -338,27 +380,27 @@ async def honeypot_post(
         
         if should_end:
             # Send callback in background
-            background_tasks.add_task(send_callback, request.sessionId, session)
+            background_tasks.add_task(send_callback, session_id, session)
             # Clean up session after callback
-            background_tasks.add_task(lambda: sessions.pop(request.sessionId, None))
+            background_tasks.add_task(lambda: sessions.pop(session_id, None))
         
-        # Build response
-        return HoneypotResponse(
-            status="success",
-            reply=result["response"],
-            sessionId=request.sessionId,
-            scamDetected=session["scam_detected"],
-            extractedIntelligence=ExtractedIntelligence(
-                upiIds=session["extracted_data"]["upi_ids"],
-                bankAccounts=session["extracted_data"]["account_numbers"],
-                ifscCodes=session["extracted_data"]["ifsc_codes"],
-                phoneNumbers=session["extracted_data"]["phone_numbers"],
-                phishingLinks=session["extracted_data"]["links"]
-            ),
-            agentStrategy=result["strategy"].get("strategy", ""),
-            currentPhase=result["strategy"].get("new_phase", ""),
-            messageCount=session["message_count"]
-        )
+        # Build response as dict (flexible format)
+        return {
+            "status": "success",
+            "reply": result["response"],
+            "sessionId": session_id,
+            "scamDetected": session["scam_detected"],
+            "extractedIntelligence": {
+                "upiIds": session["extracted_data"]["upi_ids"],
+                "bankAccounts": session["extracted_data"]["account_numbers"],
+                "ifscCodes": session["extracted_data"]["ifsc_codes"],
+                "phoneNumbers": session["extracted_data"]["phone_numbers"],
+                "phishingLinks": session["extracted_data"]["links"]
+            },
+            "agentStrategy": result["strategy"].get("strategy", ""),
+            "currentPhase": result["strategy"].get("new_phase", ""),
+            "messageCount": session["message_count"]
+        }
         
     except Exception as e:
         raise HTTPException(
