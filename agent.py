@@ -38,6 +38,22 @@ class HoneypotAgent:
         self.persona = persona_prompt
         self.conversation_history = []
 
+    def _normalize_history(self, history: list) -> list:
+        """Normalize history entries to Groq format with role/content."""
+        normalized = []
+        for msg in history or []:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            content = msg.get("content")
+            if not role:
+                sender = msg.get("sender")
+                role = "assistant" if sender == "user" else "user"
+            if content is None:
+                content = msg.get("text") or ""
+            normalized.append({"role": role, "content": str(content)})
+        return normalized
+
     def decide_strategy(self, scammer_message: str) -> dict:
         """AGENTIC LAYER: AI decides HOW to respond"""
         strategy_prompt = f"""
@@ -110,11 +126,10 @@ class HoneypotAgent:
         ]
 
         # Add conversation history
-        for msg in self.conversation_history:
-            messages.append(msg)
+        messages.extend(self._normalize_history(self.conversation_history))
 
         # Add current message
-        messages.append({"role": "user", "content": scammer_message})
+        messages.append({"role": "user", "content": str(scammer_message or "")})
 
         response = self.client.chat.completions.create(
             model=self.model,

@@ -354,8 +354,15 @@ async def honeypot_post(
         
         # Load conversation history from request if provided, otherwise use session history
         if conversation_history and len(conversation_history) > 0:
-            # Use provided history (for external callers)
-            agent.conversation_history = conversation_history
+            normalized_history = []
+            for msg in conversation_history:
+                if not isinstance(msg, dict):
+                    continue
+                sender = msg.get("sender")
+                text = msg.get("text") or msg.get("content") or ""
+                role = "assistant" if sender == "user" else "user"
+                normalized_history.append({"role": role, "content": str(text)})
+            agent.conversation_history = normalized_history
         else:
             # Use session's internal history
             agent.conversation_history = session.get("conversation_history", [])
