@@ -416,26 +416,12 @@ async def honeypot_post(
             # Clean up session after callback
             background_tasks.add_task(lambda: sessions.pop(session_id, None))
         
-        # Build response with all fields the tester might validate
-        response_data = {
+        # Response per Section 8: ONLY status + reply
+        print(f"[DEBUG] Sending response: status=success, reply={result['response'][:50]}...")
+        return {
             "status": "success",
-            "reply": result["response"],
-            "sessionId": session_id,
-            "scamDetected": session["scam_detected"],
-            "extractedIntelligence": {
-                "bankAccounts": session["extracted_data"]["account_numbers"],
-                "upiIds": session["extracted_data"]["upi_ids"],
-                "phoneNumbers": session["extracted_data"]["phone_numbers"],
-                "phishingLinks": session["extracted_data"]["links"],
-                "suspiciousKeywords": session["extracted_data"].get("suspicious_keywords", [])
-            },
-            "agentStrategy": result["strategy"].get("strategy", "TRUST"),
-            "currentPhase": result["strategy"].get("new_phase", "trust_building"),
-            "messageCount": session["message_count"]
+            "reply": result["response"]
         }
-        
-        print(f"[DEBUG] Response: {response_data}")
-        return response_data
         
     except Exception as e:
         # Return error in expected format matching spec (status + reply only)
