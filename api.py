@@ -323,23 +323,11 @@ async def honeypot_post(
         # Extract metadata
         metadata = body.get("metadata") or {}
         
-        # Handle test requests with no message - return full format
+        # Handle test requests with no message - return simple format
         if not message or not message.strip():
             return {
                 "status": "success",
-                "reply": "Hello! This is ScamBait AI honeypot. Ready to engage scammers.",
-                "sessionId": session_id,
-                "scamDetected": False,
-                "extractedIntelligence": {
-                    "upiIds": [],
-                    "bankAccounts": [],
-                    "ifscCodes": [],
-                    "phoneNumbers": [],
-                    "phishingLinks": []
-                },
-                "agentStrategy": "READY",
-                "currentPhase": "initialization",
-                "messageCount": 0
+                "reply": "Hello! This is ScamBait AI honeypot. Ready to engage scammers."
             }
         
         # Validate message length
@@ -419,29 +407,19 @@ async def honeypot_post(
             # Clean up session after callback
             background_tasks.add_task(lambda: sessions.pop(session_id, None))
         
-        # Build full response (restoring original format that worked)
+        # Build response - hackathon expects simple format: status + reply
         return {
             "status": "success",
-            "reply": result["response"],
-            "sessionId": session_id,
-            "scamDetected": session["scam_detected"],
-            "extractedIntelligence": {
-                "upiIds": session["extracted_data"]["upi_ids"],
-                "bankAccounts": session["extracted_data"]["account_numbers"],
-                "ifscCodes": session["extracted_data"]["ifsc_codes"],
-                "phoneNumbers": session["extracted_data"]["phone_numbers"],
-                "phishingLinks": session["extracted_data"]["links"]
-            },
-            "agentStrategy": result["strategy"].get("strategy", ""),
-            "currentPhase": result["strategy"].get("new_phase", ""),
-            "messageCount": session["message_count"]
+            "reply": result["response"]
         }
         
     except Exception as e:
-        # Return error in expected format
+        # Return error in expected format matching spec (status + reply only)
+        import traceback
+        traceback.print_exc()
         return {
             "status": "error",
-            "message": f"Internal server error: {str(e)}"
+            "reply": f"Error processing request: {str(e)}"
         }
 
 @app.post("/api/honeypot/end-session")
