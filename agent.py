@@ -118,15 +118,20 @@ class HoneypotAgent:
                 INSTRUCTION: {strategy_instructions.get(strategy['strategy'], 'Respond naturally.')}
                 Current phase: {strategy.get('new_phase', 'trust_building')}
                 
-                Respond naturally as the persona. Keep response under 2-3 sentences.
-                Do NOT break character. Do NOT mention you are an AI.
-                Do NOT use bullet points or lists. Just speak naturally.
+                IMPORTANT RULES:
+                - Respond naturally as the persona in 2-3 sentences MAX
+                - Do NOT break character or mention you are an AI
+                - Do NOT explain your reasoning or say things like "The user wants..."
+                - Do NOT use bullet points or lists
+                - Just speak naturally as the persona would
+                - Reply ONLY with the persona's dialogue, nothing else
                 """
             }
         ]
 
-        # Add conversation history
-        messages.extend(self._normalize_history(self.conversation_history))
+        # Add conversation history (limit to last 4 messages to avoid context overflow)
+        normalized = self._normalize_history(self.conversation_history)
+        messages.extend(normalized[-4:] if len(normalized) > 4 else normalized)
 
         # Add current message
         messages.append({"role": "user", "content": str(scammer_message or "")})
@@ -135,10 +140,25 @@ class HoneypotAgent:
             model=self.model,
             messages=messages,
             temperature=0.7,
-            max_tokens=150
+            max_tokens=100  # Reduced to keep responses short
         )
 
-        return response.choices[0].message.content
+        # Clean up response - remove any reasoning leakage
+        reply = response.choices[0].message.content
+        
+        # Strip common reasoning patterns that shouldn't appear
+        bad_patterns = [
+            "The user wants", "We need to output", "The instructions:", 
+            "The scenario:", "Output ONLY", "realistic scammer",
+            "The conversation:", "Thus we need"
+        ]
+        for pattern in bad_patterns:
+            if pattern.lower() in reply.lower():
+                # Response is corrupted, use fallback
+                reply = "Beta, main thoda confused hoon... can you please explain again slowly? My son usually helps me with these bank matters."
+                break
+        
+        return reply
 
     def process(self, scammer_message: str, persona_prompt: str) -> dict:
         """

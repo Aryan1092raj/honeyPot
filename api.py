@@ -416,11 +416,9 @@ async def honeypot_post(
             risk_level=extraction["risk_level"]
         )
         
-        # Check if session should end (end after 2 messages to keep it simple and fast)
-        should_end = (
-            session["message_count"] >= 2 or
-            sum(len(v) for v in session["extracted_data"].values()) >= 3
-        )
+        # ALWAYS end session after first response and send callback immediately
+        # This prevents endless conversations and excessive API calls
+        should_end = True  # Always end after one exchange
         
         if should_end:
             # Send callback in background
