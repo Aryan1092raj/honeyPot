@@ -58,7 +58,8 @@ async def method_not_allowed_handler(request: Request, exc):
 
 VALID_API_KEY = os.getenv("HONEYPOT_API_KEY", "scambait-secure-key-2026-hackathon")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-MAX_MESSAGES = 15  # End session after this many exchanges
+MIN_MESSAGES = 8   # Minimum exchanges before considering end
+MAX_MESSAGES = 20  # Hard cap on exchanges
 
 # ============================================================
 # SESSION MANAGER (in-memory only)
@@ -98,21 +99,29 @@ SCAM_KEYWORDS = [
 ]
 
 def detect_scam(text: str) -> bool:
-    """Lightweight scam detection"""
+    """Scam detection - requires 2+ independent signals to confirm"""
+    hits = 0
     text_lower = text.lower()
-    for kw in SCAM_KEYWORDS:
-        if kw in text_lower:
-            return True
-    # Check for UPI pattern
+    
+    # Count keyword hits (multiple keywords = 1 signal)
+    keyword_hits = sum(1 for kw in SCAM_KEYWORDS if kw in text_lower)
+    if keyword_hits >= 2:
+        hits += 1
+    
+    # Check for UPI pattern (+1 signal)
     if re.search(r'[a-zA-Z0-9._-]+@[a-zA-Z]+', text):
-        return True
-    # Check for phone pattern
+        hits += 1
+    
+    # Check for phone pattern (+1 signal)
     if re.search(r'\+91[\s-]?\d{10}|\b\d{10}\b', text):
-        return True
-    # Check for URL pattern
+        hits += 1
+    
+    # Check for URL pattern (+1 signal)
     if re.search(r'https?://|www\.', text_lower):
-        return True
-    return False
+        hits += 1
+    
+    # Require at least 2 independent signals
+    return hits >= 2
 
 # ============================================================
 # INTELLIGENCE EXTRACTION (silent)
@@ -201,6 +210,19 @@ def init_groq():
 
 init_groq()
 
+# FORBIDDEN PATTERNS - if LLM outputs any of these, use fallback
+FORBIDDEN_PATTERNS = [
+    "the user", "the scammer", "user wants", "scammer wants",
+    "training data", "output format", "instructions",
+    "i will", "i need to", "let me", "i should",
+    "as an ai", "as a language model", "i'm an ai",
+    "the victim", "the agent", "honeypot",
+    "generate", "scenario", "realistic", "respond with",
+    "here is", "here's the", "the response",
+    "i am calling from", "this is bank", "i am from bank",  # Never impersonate bank
+    "we need your", "please provide your", "share your"  # Never demand info like scammer
+]
+
 def get_llm_response(session: dict, scammer_message: str) -> str:
     """Get LLM response if available, else fallback"""
     if not groq_client:
@@ -213,18 +235,25 @@ def get_llm_response(session: dict, scammer_message: str) -> str:
         messages = [
             {
                 "role": "system",
-                "content": """You are Kamla Devi, a 62-year-old retired teacher from Jaipur.
-You speak Hinglish. You are trusting but slightly confused by technology.
-You are talking to someone who claims to be from a bank.
+                "content": """You ARE Kamla Devi. You are 62 years old. Retired school teacher from Jaipur.
+You speak Hinglish (Hindi-English mix). You are CONFUSED by technology.
 
-RULES:
-- Sound like a real elderly Indian woman
-- Be confused, ask clarifying questions
-- Never give real sensitive info
-- Keep responses short (1-2 sentences)
-- Use Hinglish naturally
+SOMEONE CALLED claiming to be from bank about your account.
 
-OUTPUT ONLY YOUR RESPONSE TEXT. Nothing else."""
+YOU MUST:
+- Sound like a REAL elderly Indian aunty
+- Be CONFUSED and DOUBTFUL
+- Ask QUESTIONS to clarify
+- DELAY and STALL
+- Say "beta", "arey", "haan ji" naturally
+- NEVER understand technical terms easily
+- NEVER give OTP, PIN, or passwords
+- NEVER claim to be from any bank or company
+- NEVER demand information from the caller
+
+YOU ARE THE VICTIM. You are RECEIVING the call. You are CONFUSED.
+
+RESPOND AS KAMLA DEVI ONLY. One short confused reply. No explanations."""
             }
         ]
         
@@ -239,14 +268,21 @@ OUTPUT ONLY YOUR RESPONSE TEXT. Nothing else."""
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
-            max_tokens=80,
+            max_tokens=60,
             temperature=0.7
         )
         
         reply = response.choices[0].message.content.strip()
         
-        # Sanitize - remove any reasoning/meta text
-        if any(x in reply.lower() for x in ["the user", "the scammer", "i will", "i need to", "let me"]):
+        # STRICT SANITIZATION - check all forbidden patterns
+        reply_lower = reply.lower()
+        for pattern in FORBIDDEN_PATTERNS:
+            if pattern in reply_lower:
+                print(f"[BLOCKED] Forbidden pattern '{pattern}' in: {reply[:50]}")
+                return get_agent_response(session, scammer_message)
+        
+        # Also block if reply is too long (likely reasoning leakage)
+        if len(reply) > 200:
             return get_agent_response(session, scammer_message)
         
         return reply if reply else get_agent_response(session, scammer_message)
@@ -266,12 +302,21 @@ async def send_callback(session_id: str, session: dict):
     
     session["callback_sent"] = True  # Mark immediately to prevent retries
     
+    # Count REAL evidence (not keywords)
+    intel = session["extracted_intelligence"]
+    evidence_count = (
+        len(intel["upiIds"]) +
+        len(intel["phoneNumbers"]) +
+        len(intel["bankAccounts"]) +
+        len(intel["phishingLinks"])
+    )
+    
     payload = {
         "sessionId": session_id,
         "scamDetected": session["scam_detected"],
         "totalMessagesExchanged": session["messages_exchanged"],
         "extractedIntelligence": session["extracted_intelligence"],
-        "agentNotes": f"Engaged scammer for {session['messages_exchanged']} exchanges. Extracted {sum(len(v) for v in session['extracted_intelligence'].values())} evidence items."
+        "agentNotes": f"AI agent engaged suspected scammer for {session['messages_exchanged']} message exchanges. Extracted {evidence_count} financial identifiers (UPI IDs, phone numbers, bank accounts, URLs)."
     }
     
     try:
@@ -358,11 +403,20 @@ async def honeypot(request: Request, background_tasks: BackgroundTasks):
     })
     
     # STEP 5: Check if should end session
+    # MUST have minimum 8 exchanges before considering end
+    intel = session["extracted_intelligence"]
+    has_enough_intel = (
+        len(intel["upiIds"]) >= 1 or
+        len(intel["phoneNumbers"]) >= 1 or
+        len(intel["bankAccounts"]) >= 1 or
+        len(intel["phishingLinks"]) >= 1
+    )
+    
     should_end = (
+        # Hard cap reached
         session["messages_exchanged"] >= MAX_MESSAGES or
-        len(session["extracted_intelligence"]["upiIds"]) >= 2 or
-        len(session["extracted_intelligence"]["phoneNumbers"]) >= 2 or
-        len(session["extracted_intelligence"]["bankAccounts"]) >= 1
+        # Minimum reached AND meaningful intel extracted
+        (session["messages_exchanged"] >= MIN_MESSAGES and has_enough_intel)
     )
     
     # STEP 6: Send callback if ending and scam detected
