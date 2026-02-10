@@ -116,6 +116,23 @@ CRITICAL RULES:
                 # Metadata leaked - use safe fallback
                 return "Arey beta... samajh nahi aaya... phone pe dikkat hai... phir se bolo na?"
         
+        # ── POST-GENERATION SAFETY FILTER ──
+        # Block any reply that facilitates payment mechanics
+        import re
+        payment_patterns = [
+            r'\bupi\b', r'\bnet\s*banking\b', r'\bpaytm\b', r'\bgpay\b',
+            r'\bphonepe\b', r'\bneft\b', r'\brtgs\b', r'\bimps\b',
+            r'\bpay\s+(now|here|using|via|through)\b',
+            r'\bsend\s+(money|amount|payment)\b',
+            r'\btransfer\s+(money|amount|fund)\b',
+            r'\bwallet\b', r'\bkaise\s+(pay|bhej|transfer)\b',
+            r'\bkahan\s+(bhej|send)\b',
+        ]
+        for pat in payment_patterns:
+            if re.search(pat, reply_lower):
+                # Payment facilitation detected - regenerate with safe fallback
+                return "Beta... mujhe samajh nahi aa raha... aap pehle apna naam aur office ka address bolo?"
+        
         # Block overly long responses (likely reasoning leak)
         if len(reply) > 200:
             return "Haan haan... par thoda slow bolo na... pen se likhna hai..."
