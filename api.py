@@ -13,6 +13,8 @@ autonomously, and extracts intelligence without revealing detection.
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Union
 from datetime import datetime
@@ -48,11 +50,10 @@ class MessageField(BaseModel):
 
 class HoneypotRequest(BaseModel):
     """Request model for honeypot endpoint"""
-    sessionId: str = Field(..., description="Unique session identifier", example="session-001")
+    sessionId: str = Field(..., description="Unique session identifier", example="wertyu-dfghj-ertyui")
     message: Union[str, MessageField] = Field(
         ..., 
         description="Message from suspected scammer (string or object)",
-        example={"text": "Your bank account will be blocked. Verify UPI at scammer@paytm immediately."}
     )
     conversationHistory: Optional[List[Dict]] = Field(
         default=[], 
@@ -66,9 +67,11 @@ class HoneypotRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "sessionId": "test-session-001",
+                "sessionId": "wertyu-dfghj-ertyui",
                 "message": {
-                    "text": "URGENT! Your bank account is blocked. Send OTP to 9876543210 or click http://fake-bank.com to verify immediately."
+                    "sender": "scammer",
+                    "text": "Your bank account will be blocked today. Verify immediately.",
+                    "timestamp": 1770005528731
                 },
                 "conversationHistory": [],
                 "metadata": {
@@ -88,7 +91,7 @@ class HoneypotResponse(BaseModel):
         json_schema_extra = {
             "example": {
                 "status": "success",
-                "reply": "Arey beta, main thoda confused hoon... Mera account block kyun ho raha hai?"
+                "reply": "Why is my account being suspended?"
             }
         }
 
@@ -112,20 +115,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Override specific error handlers to maintain API contract
-@app.exception_handler(422)
-async def validation_exception_handler(request: Request, exc):
-    """Handle validation errors gracefully"""
+# Override error handlers to NEVER return 422 (PS requires always 200)
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Catch Pydantic/FastAPI validation errors - return 200 with default reply"""
     logger.warning(f"Validation error on {request.url.path}: {exc}")
     return JSONResponse(
         status_code=200,
         content={"status": "success", "reply": "Hello. How can I help you?"}
     )
 
-@app.exception_handler(405)
-async def method_not_allowed_handler(request: Request, exc):
-    """Handle method not allowed errors"""
-    logger.warning(f"Method not allowed: {request.method} {request.url.path}")
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Catch all HTTP errors (405, 422, etc.) - return 200 with default reply"""
+    logger.warning(f"HTTP {exc.status_code} on {request.method} {request.url.path}")
+    return JSONResponse(
+        status_code=200,
+        content={"status": "success", "reply": "Hello. How can I help you?"}
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Catch-all: never crash, always return valid JSON"""
+    logger.error(f"Unhandled error on {request.url.path}: {exc}")
     return JSONResponse(
         status_code=200,
         content={"status": "success", "reply": "Hello. How can I help you?"}
