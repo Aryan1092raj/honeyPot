@@ -180,33 +180,33 @@ FORBIDDEN_PATTERNS = (
     "we need your", "please provide your", "share your"
 )
 
-# Fallback responses organized by conversation phase
+# Fallback responses - persona-neutral, no hardcoded names/details
 # These rotate based on message count to simulate realistic conversation flow
 NAIVE_RESPONSES = (
     # Phase 1: Initial confusion & trust-building (messages 0-4)
     "Haan ji? Kaun bol raha hai? Mera account ka kya hua... mujhe toh koi message nahi aaya?",
-    "Arey arey... blocked matlab? Abhi toh ATM se pension nikala tha... aap pakka bank se ho?",
-    "Acha acha... par aapka naam kya hai beta? Likhna padega na mujhe... pen dhundhti hoon ruko...",
-    "Haan haan samajh rahi hoon... woh KYC KYC kya hota hai? Rohit bolta tha kuch aisa...",
-    "Aap SBI se ho na? Mere Mansarovar branch se? Manager ka naam kya hai wahan?",
+    "Arey arey... blocked matlab? Aap pakka bank se ho?",
+    "Acha acha... par aapka naam kya hai? Likhna padega na mujhe... pen dhundhti hoon ruko...",
+    "Haan haan samajh rahi hoon... woh KYC KYC kya hota hai exactly?",
+    "Kaun se branch se bol rahe ho? Manager ka naam kya hai wahan?",
     # Phase 2: Controlled confusion & stalling (messages 5-9)
-    "Ek minute beta... chasma lagati hoon... phone pe chhota likha hai sab... haan bolo?",
-    "PhonePe? Haan hai mere paas... Rohit ne daala tha Diwali pe... par usme kya karna hai?",
-    "OTP aata hai na green color wala message mein? Ruko ruko check karti hoon... bahut messages hain WhatsApp pe...",
-    "Matlab main woh app wala open karoon? Haan kar rahi hoon... thoda slow hai phone... purana nahi hai par...",
-    "Woh link wala message bheja aapne? Ruko dekhti hoon... yeh theek hai na? Rohit bolta hai link mat kholna...",
+    "Ek minute... chasma lagati hoon... phone pe chhota likha hai sab... haan bolo?",
+    "PhonePe? Haan hai mere paas... par usme kya karna hai exactly?",
+    "OTP aata hai na green color wala message mein? Ruko ruko check karti hoon...",
+    "Matlab main woh app wala open karoon? Haan kar rahi hoon... thoda slow hai phone...",
+    "Woh link wala message bheja aapne? Ruko dekhti hoon... yeh theek hai na?",
     # Phase 3: Almost-compliance & extraction (messages 10-14)
-    "Haan haan main bhejti hoon... par kahan bhejoon? Woh UPI ID phir se bolo na slowly... likhti hoon...",
-    "₹38,000 pension aata hai mahine ka beta... uska kuch nahi hoga na? Suresh ji ka paisa hai woh FD mein bhi...",
-    "Account number chahiye aapko? Woh passbook mein likha hai na... ruko almari se lati hoon...",
-    "Arey beta itni jaldi kyun? Kal nahi ho sakta? Rohit Sunday ko aayega toh woh kar dega...",
-    "Theek hai theek hai... aap woh number phir se bolo na? 9 se shuru tha na? Likhti hoon...",
+    "Haan haan main bhejti hoon... par kahan bhejoon? Woh UPI ID phir se bolo na slowly...",
+    "Pension aata hai mahine ka... uska kuch nahi hoga na? FD mein bhi hai thoda...",
+    "Account number chahiye aapko? Woh passbook mein likha hai na... ruko lati hoon...",
+    "Arey itni jaldi kyun? Kal nahi ho sakta?",
+    "Theek hai theek hai... aap woh number phir se bolo na? Likhti hoon...",
     # Phase 4: Doubt & re-engagement (messages 15-19)
-    "Ek baat batao beta... agar aap bank se ho toh mera account number toh aapke paas hoga na?",
-    "Meri padosan Sharma aunty bol rahi thi ki aajkal bahut fraud hota hai... aap toh real ho na?",
-    "Haan haan kar rahi hoon... bas ek minute... phone rakh ke wapas call karna padega kya? Battery kam hai...",
-    "Acha aap branch ka number do main khud call karke confirm kar leti hoon... Rohit bolta tha verify karo...",
-    "Main complaint likhi hai... aapka ID number kya tha? Woh bhi likh deti hoon... naam phir se bolo na?"
+    "Ek baat batao... agar aap bank se ho toh mera account number toh aapke paas hoga na?",
+    "Padosan bol rahi thi ki aajkal bahut fraud hota hai... aap toh real ho na?",
+    "Haan haan kar rahi hoon... bas ek minute... battery kam hai phone ki...",
+    "Acha aap branch ka number do main khud call karke confirm karti hoon...",
+    "Main complaint likhi hai... aapka ID number kya tha? Naam phir se bolo na?"
 )
 
 # ============================================================
@@ -251,6 +251,8 @@ def get_session(session_id: str) -> dict:
         sessions[session_id] = {
             "messages_exchanged": 0,
             "scam_detected": False,
+            "persona_name": None,
+            "persona_prompt": None,
             "extracted_intelligence": {
                 "bankAccounts": [],
                 "upiIds": [],
@@ -380,9 +382,10 @@ def get_agent_response(session: dict, scammer_message: str) -> str:
 # Suspicion replies - used when scam signals detected but not confirmed
 _SUSPICION_REPLIES = (
     "Ji? Kaun bol raha hai? Mujhe koi message toh nahi aaya bank se...",
-    "Haan ji? Mera account ka kya hua? Aap kaun ho beta?",
+    "Haan ji? Mera account ka kya hua? Aap kaun ho?",
     "Arey? Bank se ho? Par bank toh kabhi phone nahi karta... aap pakka bank se ho?",
     "Kya bol rahe ho? Account block? Abhi toh sab theek tha... aapka naam kya hai?",
+    "Hello? Kaun bol raha hai? Kaunsa bank? Mujhe toh koi message nahi aaya...",
 )
 
 def get_suspicion_reply() -> str:
@@ -416,15 +419,22 @@ def get_llm_response(session: dict, scammer_message: str) -> str:
     """
     Get LLM-generated response if available, else fallback.
     Implements strict sanitization to prevent reasoning leakage.
+    Persona is selected ONCE per session, not per message.
     """
     if not groq_client:
         return get_agent_response(session, scammer_message)
     
     try:
-        # AUTO-SELECT PERSONA based on scam type
+        # AUTO-SELECT PERSONA (once per session, not per message)
         from personas import get_optimal_persona
-        persona_name, persona_prompt = get_optimal_persona(scammer_message)
-        logger.info(f"Auto-selected persona: {persona_name}")
+        if session.get("persona_name") is None:
+            persona_name, persona_prompt = get_optimal_persona(scammer_message)
+            session["persona_name"] = persona_name
+            session["persona_prompt"] = persona_prompt
+            logger.info(f"Session persona locked: {persona_name}")
+        else:
+            persona_name = session["persona_name"]
+            persona_prompt = session["persona_prompt"]
         
         # Build minimal context (last 4 messages only)
         history = session["conversation"][-4:]
@@ -577,6 +587,24 @@ async def honeypot(request: HoneypotRequest, background_tasks: BackgroundTasks) 
     
     # Extract message text
     message = _extract_message_text(request.message)
+    
+    # Seed session conversation from PS conversationHistory (first message only)
+    if session["messages_exchanged"] == 0 and request.conversationHistory:
+        for hist_msg in request.conversationHistory:
+            if isinstance(hist_msg, dict):
+                sender = hist_msg.get("sender", "scammer")
+                text = hist_msg.get("text", "")
+                if sender == "scammer":
+                    session["conversation"].append({"scammer": text, "agent": "", "timestamp": datetime.now().isoformat()})
+                    # Also extract intel from history messages
+                    extract_intelligence(text, session)
+                    if not session["scam_detected"]:
+                        session["scam_detected"] = detect_scam(text)
+                elif sender == "user":
+                    # Attach agent reply to last scammer entry
+                    if session["conversation"]:
+                        session["conversation"][-1]["agent"] = text
+                    session["messages_exchanged"] += 1
     
     # No message? Return default
     if not message:
