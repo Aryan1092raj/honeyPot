@@ -389,6 +389,11 @@ def get_llm_response(session: dict, scammer_message: str) -> str:
         return get_agent_response(session, scammer_message)
     
     try:
+        # AUTO-SELECT PERSONA based on scam type
+        from personas import get_optimal_persona
+        persona_name, persona_prompt = get_optimal_persona(scammer_message)
+        logger.info(f"Auto-selected persona: {persona_name}")
+        
         # Build minimal context (last 4 messages only)
         history = session["conversation"][-4:]
         
@@ -406,18 +411,7 @@ def get_llm_response(session: dict, scammer_message: str) -> str:
         messages = [
             {
                 "role": "system",
-                "content": f"""You ARE Kamla Devi, 62 years old, retired Hindi teacher from Jaipur. Widow. Son Rohit is in Bangalore.
-
-Someone is calling about your bank account. You are CONFUSED by technology.
-
-SPEAKING STYLE (CRITICAL — sound like a REAL Indian aunty, NOT a textbook):
-- Mix Hindi-English in SAME sentence: "Haan woh OTP aata hai na green wala message mein?"
-- Use naturally: "arey", "beta", "haan haan", "acha acha", "ek minute", "ruko ruko"
-- Rhetorical tags: "hai na?", "nahi kya?", "theek hai na?", "ho jayega na?"
-- Think out loud: "Pen kahan rakha tha... ruko... haan bolo likhti hoon..."
-- Repeat their terms confused: "UPI UPI... haan woh PhonePe wala na?"
-- Mispronounce tech: "passvord", "nett banking", "app wala"
-- Reference son: "Rohit bolta hai kisi ko mat dena... par aap toh bank se ho na?"
+                "content": f"""{persona_prompt}
 
 CURRENT PHASE: {phase_instruction}
 
@@ -428,7 +422,7 @@ RULES:
 - NEVER say "I will" or "Let me" (English-style)
 - NEVER write explanations or reasoning
 - Ask innocent questions that make them reveal details (UPI ID, number, link)
-- You can mention pension (₹38,000) or FD vaguely to keep them interested"""
+- Mention your financial details vaguely to keep them interested"""
             }
         ]
         
@@ -609,23 +603,35 @@ async def honeypot(request: HoneypotRequest, background_tasks: BackgroundTasks) 
     
     return HoneypotResponse(status="success", reply=reply)
 
-@app.api_route("/api/honeypot", methods=["GET", "HEAD", "OPTIONS"])
-@app.api_route("/api/endpoint", methods=["GET", "HEAD", "OPTIONS"])
+@app.get("/api/honeypot")
+@app.head("/api/honeypot")
+@app.options("/api/honeypot")
+@app.get("/api/endpoint")
+@app.head("/api/endpoint")
+@app.options("/api/endpoint")
 async def honeypot_other_methods(request: Request) -> dict:
     """Handle non-POST requests to honeypot endpoint"""
     if request.method == "GET":
-        return {"status": "success", "reply": "Hello. How can I help you?"}
+        return {"status": "success", "reply": "ScamBait AI Honeypot is active"}
     return {"status": "success", "reply": "OK"}
 
 @app.get("/", tags=["Health"])
+@app.head("/", tags=["Health"])
+async def root() -> dict:
+    """Root endpoint"""
+    return {"status": "success", "reply": "ScamBait AI is running"}
+
 @app.get("/health", tags=["Health"])
+@app.head("/health", tags=["Health"])
 async def health() -> dict:
     """Health check endpoint"""
     return {
-        "status": "success",
+        "status": "healthy",
         "service": "ScamBait AI Honeypot",
         "version": "1.0.0",
-        "groq_available": groq_client is not None
+        "active_sessions": len(sessions),
+        "groq_available": groq_client is not None,
+        "timestamp": datetime.now().isoformat()
     }
 
 # ============================================================
