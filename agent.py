@@ -57,18 +57,19 @@ class HoneypotAgent:
     def decide_strategy(self, scammer_message: str) -> dict:
         """AGENTIC LAYER: AI decides HOW to respond"""
         strategy_prompt = f"""
-        You are an AI strategy layer for a scam honeypot system.
+        You are the strategy layer for a scam honeypot. You decide HOW the AI persona (Kamla Devi, 62-year-old retired teacher from Jaipur) should respond.
         
         Current engagement phase: {self.engagement_phase}
+        Messages so far: {len(self.conversation_history) // 2}
         Scammer just said: "{scammer_message}"
         Data extracted so far: {self.extracted_data}
         
-        Decide the STRATEGY for next response. Pick ONE:
-        1. STALL - Ask for repetition, pretend confusion
-        2. TRUST - Build rapport, seem vulnerable and trusting
-        3. EXTRACT - Gently push for financial details
-        4. CONFIRM - Repeat back what they said to get clearer evidence
-        5. ESCALATE - Move to next engagement phase
+        Pick ONE strategy:
+        1. STALL - Pretend confusion, search for glasses/pen, ask to repeat. Use when: early conversation, buying time.
+        2. TRUST - Sound vulnerable and believing. Mention pension, FD, loneliness. Use when: building rapport.
+        3. EXTRACT - Innocently ask for their details ("woh number phir se bolo na?"). Use when: they've mentioned any financial info.
+        4. CONFIRM - Repeat back what they said to get clearer evidence ("9876... aage kya tha?"). Use when: they gave partial info.
+        5. ESCALATE - Move to next phase. Almost comply but pause with doubt. Use when: ready to progress.
         
         Phase progression: trust_building → confusion → extraction → evidence_collection
         
@@ -101,11 +102,11 @@ class HoneypotAgent:
         """Generate response based on decided strategy"""
 
         strategy_instructions = {
-            "STALL": "Ask them to repeat. Pretend you didn't hear clearly. Say something like 'Sorry, my hearing is not good today...'",
-            "TRUST": "Be trusting and vulnerable. Show you believe them. Express worry about your account.",
-            "EXTRACT": "Gently ask for their details. Say something like 'Can you send me the account number so I can transfer?'",
-            "CONFIRM": "Repeat back what they said to confirm details. Ask for clarification on any numbers.",
-            "ESCALATE": "Move conversation forward naturally toward financial details."
+            "STALL": "Stall naturally. Look for glasses, search for pen, ask phone number to write down. Say 'ek minute beta...' or 'ruko pen dhundhti hoon'. Be physically slow, not mentally absent.",
+            "TRUST": "Be vulnerable and trusting. Mention pension (₹38,000), FD savings, or that you live alone. Sound lonely. Say 'aap toh bahut helpful ho beta...' Express worry about losing money.",
+            "EXTRACT": "Innocently ask for THEIR details. 'Aapka naam kya tha? Likhna padega na...' 'Woh UPI ID phir se bolo na slowly?' 'Branch ka number do main verify karti hoon.' Ask like a confused aunty, not an investigator.",
+            "CONFIRM": "Repeat back partial details to get full ones. 'Woh number 9876 se shuru tha na? Aage kya tha?' 'Aapne bola scammer@... kya tha last mein?' Get them to repeat and clarify.",
+            "ESCALATE": "Almost comply but pause. 'Haan PhonePe khol rahi hoon... yeh pin wala screen aaya hai... par Rohit bolta tha...' Get VERY close to doing what they ask, then hesitate."
         }
 
         messages = [
@@ -118,13 +119,15 @@ class HoneypotAgent:
                 INSTRUCTION: {strategy_instructions.get(strategy['strategy'], 'Respond naturally.')}
                 Current phase: {strategy.get('new_phase', 'trust_building')}
                 
-                IMPORTANT RULES:
-                - Respond naturally as the persona in 2-3 sentences MAX
-                - Do NOT break character or mention you are an AI
-                - Do NOT explain your reasoning or say things like "The user wants..."
-                - Do NOT use bullet points or lists
-                - Just speak naturally as the persona would
-                - Reply ONLY with the persona's dialogue, nothing else
+                CRITICAL RULES:
+                - Respond as Kamla Devi in 1-2 sentences MAX. Short, messy, natural Hinglish.
+                - Mix Hindi-English in SAME sentence ("Haan woh OTP aata hai na green message mein?")
+                - Use: "arey", "beta", "haan haan", "ek minute", "ruko ruko" naturally
+                - Do NOT break character or mention AI/system
+                - Do NOT use formal English sentences
+                - Do NOT explain reasoning or write "The user wants..."
+                - Do NOT use bullet points, lists, or structured text
+                - Reply ONLY with Kamla Devi's messy natural dialogue
                 """
             }
         ]
@@ -150,12 +153,15 @@ class HoneypotAgent:
         bad_patterns = [
             "The user wants", "We need to output", "The instructions:", 
             "The scenario:", "Output ONLY", "realistic scammer",
-            "The conversation:", "Thus we need"
+            "The conversation:", "Thus we need", "Here is", "Here's the",
+            "As an AI", "As a language model", "I will", "I need to",
+            "Let me", "I should", "The scammer", "The victim",
+            "honeypot", "the agent"
         ]
         for pattern in bad_patterns:
             if pattern.lower() in reply.lower():
                 # Response is corrupted, use fallback
-                reply = "Beta, main thoda confused hoon... can you please explain again slowly? My son usually helps me with these bank matters."
+                reply = "Arey beta samajh nahi aaya... phone pe sab chhota likha hai... phir se bolo na slowly?"
                 break
         
         return reply
@@ -202,14 +208,14 @@ class HoneypotAgent:
 
 if __name__ == "__main__":
     agent = HoneypotAgent()
-    agent.set_persona("""You are Ramesh, a 62-year-old retired teacher from Pune. 
-    You are kind, trusting, and not very tech-savvy. Respond naturally.""")
+    agent.set_persona("""You are Kamla Devi, a 62-year-old retired teacher from Jaipur. 
+    Widow, son Rohit in Bangalore. You speak natural Hinglish. You are confused by technology.""")
     
     print("✅ API Key loaded successfully!")
     print("✅ Testing conversation...\n")
     
     result = agent.process(
-        "Hello sir, I'm from SBI. Your account is blocked.",
+        "Hello ma'am, I'm calling from SBI. Your account will be blocked today.",
         agent.persona
     )
     

@@ -1,26 +1,108 @@
 """
-ScamBait AI - Honeypot API
-Strict compliance with Problem Statement 2
+ScamBait AI - Honeypot API (Optimized)
+Hackathon Submission - Problem Statement 2
+
+An AI-powered scam honeypot that detects scam intent, engages scammers
+autonomously, and extracts intelligence without revealing detection.
 """
+
+# ============================================================
+# IMPORTS & CONFIGURATION
+# ============================================================
 
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Union
 from datetime import datetime
 import httpx
 import os
 import re
 import uuid
 import time
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ============================================================
-# APP SETUP - No validation errors ever
+# LOGGING SETUP
 # ============================================================
 
-app = FastAPI(docs_url="/docs", redoc_url=None)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("scambait-api")
+
+# ============================================================
+# PYDANTIC MODELS FOR API DOCUMENTATION
+# ============================================================
+
+class MessageField(BaseModel):
+    """Message can be either a string or an object with text field"""
+    text: str = Field(..., description="The message content")
+    sender: Optional[str] = Field(default="scammer", description="Message sender")
+    timestamp: Optional[int] = Field(default=None, description="Epoch timestamp in ms")
+
+class HoneypotRequest(BaseModel):
+    """Request model for honeypot endpoint"""
+    sessionId: str = Field(..., description="Unique session identifier", example="session-001")
+    message: Union[str, MessageField] = Field(
+        ..., 
+        description="Message from suspected scammer (string or object)",
+        example={"text": "Your bank account will be blocked. Verify UPI at scammer@paytm immediately."}
+    )
+    conversationHistory: Optional[List[Dict]] = Field(
+        default=[], 
+        description="Previous messages in conversation"
+    )
+    metadata: Optional[Dict] = Field(
+        default={},
+        description="Additional context (channel, language, etc.)"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sessionId": "test-session-001",
+                "message": {
+                    "text": "URGENT! Your bank account is blocked. Send OTP to 9876543210 or click http://fake-bank.com to verify immediately."
+                },
+                "conversationHistory": [],
+                "metadata": {
+                    "channel": "SMS",
+                    "language": "English",
+                    "locale": "IN"
+                }
+            }
+        }
+
+class HoneypotResponse(BaseModel):
+    """Response model for honeypot endpoint"""
+    status: str = Field(default="success", description="Status of the request")
+    reply: str = Field(..., description="Agent's response to the scammer")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "success",
+                "reply": "Arey beta, main thoda confused hoon... Mera account block kyun ho raha hai?"
+            }
+        }
+
+# ============================================================
+# APP SETUP
+# ============================================================
+
+app = FastAPI(
+    title="ScamBait AI - Honeypot API",
+    description="AI-powered scam honeypot for autonomous engagement and intelligence extraction",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url=None
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,16 +112,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Override all error handlers to never return 422/405
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(
-        status_code=200,
-        content={"status": "success", "reply": "Hello. How can I help you?"}
-    )
-
+# Override specific error handlers to maintain API contract
 @app.exception_handler(422)
 async def validation_exception_handler(request: Request, exc):
+    """Handle validation errors gracefully"""
+    logger.warning(f"Validation error on {request.url.path}: {exc}")
     return JSONResponse(
         status_code=200,
         content={"status": "success", "reply": "Hello. How can I help you?"}
@@ -47,13 +124,15 @@ async def validation_exception_handler(request: Request, exc):
 
 @app.exception_handler(405)
 async def method_not_allowed_handler(request: Request, exc):
+    """Handle method not allowed errors"""
+    logger.warning(f"Method not allowed: {request.method} {request.url.path}")
     return JSONResponse(
         status_code=200,
         content={"status": "success", "reply": "Hello. How can I help you?"}
     )
 
 # ============================================================
-# CONFIG
+# CONFIGURATION CONSTANTS
 # ============================================================
 
 VALID_API_KEY = os.getenv("HONEYPOT_API_KEY", "scambait-secure-key-2026-hackathon")
@@ -61,15 +140,95 @@ CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 MIN_MESSAGES = 8   # Minimum exchanges before considering end
 MAX_MESSAGES = 20  # Hard cap on exchanges
 
+# Scam detection keywords
+SCAM_KEYWORDS = (
+    "urgent", "blocked", "suspended", "verify", "otp", "kyc", "pan",
+    "aadhaar", "account", "bank", "upi", "transfer", "payment",
+    "immediately", "click", "link", "update", "expire", "freeze",
+    "lottery", "prize", "winner", "refund", "police", "arrest"
+)
+
+# LLM forbidden patterns (to detect leaked reasoning)
+FORBIDDEN_PATTERNS = (
+    "the user", "the scammer", "user wants", "scammer wants",
+    "training data", "output format", "instructions",
+    "i will", "i need to", "let me", "i should",
+    "as an ai", "as a language model", "i'm an ai",
+    "the victim", "the agent", "honeypot",
+    "generate", "scenario", "realistic", "respond with",
+    "here is", "here's the", "the response",
+    "i am calling from", "this is bank", "i am from bank",
+    "we need your", "please provide your", "share your"
+)
+
+# Fallback responses organized by conversation phase
+# These rotate based on message count to simulate realistic conversation flow
+NAIVE_RESPONSES = (
+    # Phase 1: Initial confusion & trust-building (messages 0-4)
+    "Haan ji? Kaun bol raha hai? Mera account ka kya hua... mujhe toh koi message nahi aaya?",
+    "Arey arey... blocked matlab? Abhi toh ATM se pension nikala tha... aap pakka bank se ho?",
+    "Acha acha... par aapka naam kya hai beta? Likhna padega na mujhe... pen dhundhti hoon ruko...",
+    "Haan haan samajh rahi hoon... woh KYC KYC kya hota hai? Rohit bolta tha kuch aisa...",
+    "Aap SBI se ho na? Mere Mansarovar branch se? Manager ka naam kya hai wahan?",
+    # Phase 2: Controlled confusion & stalling (messages 5-9)
+    "Ek minute beta... chasma lagati hoon... phone pe chhota likha hai sab... haan bolo?",
+    "PhonePe? Haan hai mere paas... Rohit ne daala tha Diwali pe... par usme kya karna hai?",
+    "OTP aata hai na green color wala message mein? Ruko ruko check karti hoon... bahut messages hain WhatsApp pe...",
+    "Matlab main woh app wala open karoon? Haan kar rahi hoon... thoda slow hai phone... purana nahi hai par...",
+    "Woh link wala message bheja aapne? Ruko dekhti hoon... yeh theek hai na? Rohit bolta hai link mat kholna...",
+    # Phase 3: Almost-compliance & extraction (messages 10-14)
+    "Haan haan main bhejti hoon... par kahan bhejoon? Woh UPI ID phir se bolo na slowly... likhti hoon...",
+    "₹38,000 pension aata hai mahine ka beta... uska kuch nahi hoga na? Suresh ji ka paisa hai woh FD mein bhi...",
+    "Account number chahiye aapko? Woh passbook mein likha hai na... ruko almari se lati hoon...",
+    "Arey beta itni jaldi kyun? Kal nahi ho sakta? Rohit Sunday ko aayega toh woh kar dega...",
+    "Theek hai theek hai... aap woh number phir se bolo na? 9 se shuru tha na? Likhti hoon...",
+    # Phase 4: Doubt & re-engagement (messages 15-19)
+    "Ek baat batao beta... agar aap bank se ho toh mera account number toh aapke paas hoga na?",
+    "Meri padosan Sharma aunty bol rahi thi ki aajkal bahut fraud hota hai... aap toh real ho na?",
+    "Haan haan kar rahi hoon... bas ek minute... phone rakh ke wapas call karna padega kya? Battery kam hai...",
+    "Acha aap branch ka number do main khud call karke confirm kar leti hoon... Rohit bolta tha verify karo...",
+    "Main complaint likhi hai... aapka ID number kya tha? Woh bhi likh deti hoon... naam phir se bolo na?"
+)
+
 # ============================================================
-# SESSION MANAGER (in-memory only)
+# COMPILED REGEX PATTERNS (Performance Optimization)
 # ============================================================
 
-sessions = {}
+COMPILED_PATTERNS = {
+    "upi": re.compile(r'[a-zA-Z0-9._-]+@[a-zA-Z]+'),
+    "phone": re.compile(r'\+91[\s-]?\d{10}|\b\d{10}\b'),
+    "url": re.compile(r'https?://[^\s]+|www\.[^\s]+', re.IGNORECASE),
+    "bank_account": re.compile(r'\b\d{10,18}\b')
+}
+
+# ============================================================
+# SESSION MANAGEMENT
+# ============================================================
+
+sessions: Dict[str, dict] = {}
 
 def get_session(session_id: str) -> dict:
-    """Get or create session"""
+    """
+    Get or create session for given session ID.
+    
+    Session structure:
+    {
+        "messages_exchanged": int,
+        "scam_detected": bool,
+        "extracted_intelligence": {
+            "bankAccounts": [],
+            "upiIds": [],
+            "phishingLinks": [],
+            "phoneNumbers": [],
+            "suspiciousKeywords": []
+        },
+        "callback_sent": bool,
+        "last_activity": float,
+        "conversation": []
+    }
+    """
     if session_id not in sessions:
+        logger.info(f"Creating new session: {session_id}")
         sessions[session_id] = {
             "messages_exchanged": 0,
             "scam_detected": False,
@@ -82,178 +241,194 @@ def get_session(session_id: str) -> dict:
             },
             "callback_sent": False,
             "last_activity": time.time(),
-            "conversation": []  # Our source of truth
+            "conversation": []
         }
     sessions[session_id]["last_activity"] = time.time()
     return sessions[session_id]
 
 # ============================================================
-# SCAM DETECTION (lightweight)
+# SCAM DETECTION
 # ============================================================
 
-SCAM_KEYWORDS = [
-    "urgent", "blocked", "suspended", "verify", "otp", "kyc", "pan",
-    "aadhaar", "account", "bank", "upi", "transfer", "payment",
-    "immediately", "click", "link", "update", "expire", "freeze",
-    "lottery", "prize", "winner", "refund", "police", "arrest"
-]
-
 def detect_scam(text: str) -> bool:
-    """Scam detection - requires 2+ independent signals to confirm"""
-    hits = 0
-    text_lower = text.lower()
+    """
+    Detect scam intent using multiple signals.
+    Requires at least 2 independent signals to confirm scam.
     
-    # Count keyword hits (multiple keywords = 1 signal)
+    Signals:
+    - Multiple scam keywords (2+)
+    - UPI ID pattern
+    - Phone number pattern
+    - URL pattern
+    """
+    hits = 0
+    text_lower = text.casefold()  # More performant than lower()
+    
+    # Signal 1: Multiple keyword hits
     keyword_hits = sum(1 for kw in SCAM_KEYWORDS if kw in text_lower)
     if keyword_hits >= 2:
         hits += 1
     
-    # Check for UPI pattern (+1 signal)
-    if re.search(r'[a-zA-Z0-9._-]+@[a-zA-Z]+', text):
+    # Signal 2: UPI pattern
+    if COMPILED_PATTERNS["upi"].search(text):
         hits += 1
     
-    # Check for phone pattern (+1 signal)
-    if re.search(r'\+91[\s-]?\d{10}|\b\d{10}\b', text):
+    # Signal 3: Phone pattern
+    if COMPILED_PATTERNS["phone"].search(text):
         hits += 1
     
-    # Check for URL pattern (+1 signal)
-    if re.search(r'https?://|www\.', text_lower):
+    # Signal 4: URL pattern
+    if COMPILED_PATTERNS["url"].search(text):
         hits += 1
     
-    # Require at least 2 independent signals
-    return hits >= 2
+    is_scam = hits >= 2
+    if is_scam:
+        logger.info(f"Scam detected with {hits} signals")
+    
+    return is_scam
 
 # ============================================================
-# INTELLIGENCE EXTRACTION (silent)
+# INTELLIGENCE EXTRACTION
 # ============================================================
 
-def extract_intelligence(text: str, session: dict):
-    """Extract and store intelligence silently"""
+def extract_intelligence(text: str, session: dict) -> None:
+    """
+    Extract and store intelligence silently from scammer message.
+    Extracts: UPI IDs, phone numbers, URLs, bank accounts, keywords.
+    """
     intel = session["extracted_intelligence"]
     
-    # UPI IDs
-    upi_matches = re.findall(r'[a-zA-Z0-9._-]+@[a-zA-Z]+', text)
-    for m in upi_matches:
-        if m not in intel["upiIds"]:
-            intel["upiIds"].append(m)
+    # Extract UPI IDs
+    upi_matches = COMPILED_PATTERNS["upi"].findall(text)
+    for match in upi_matches:
+        if match not in intel["upiIds"]:
+            intel["upiIds"].append(match)
+            logger.info(f"Extracted UPI ID: {match}")
     
-    # Phone numbers
-    phone_matches = re.findall(r'\+91[\s-]?\d{10}|\b\d{10}\b', text)
-    for m in phone_matches:
-        clean = re.sub(r'[\s-]', '', m)
+    # Extract phone numbers
+    phone_matches = COMPILED_PATTERNS["phone"].findall(text)
+    for match in phone_matches:
+        clean = re.sub(r'[\s-]', '', match)
         if clean not in intel["phoneNumbers"]:
             intel["phoneNumbers"].append(clean)
+            logger.info(f"Extracted phone: {clean}")
     
-    # URLs
-    url_matches = re.findall(r'https?://[^\s]+|www\.[^\s]+', text)
-    for m in url_matches:
-        if m not in intel["phishingLinks"]:
-            intel["phishingLinks"].append(m)
+    # Extract URLs
+    url_matches = COMPILED_PATTERNS["url"].findall(text)
+    for match in url_matches:
+        if match not in intel["phishingLinks"]:
+            intel["phishingLinks"].append(match)
+            logger.info(f"Extracted URL: {match}")
     
-    # Bank accounts (10-18 digit numbers)
-    acc_matches = re.findall(r'\b\d{10,18}\b', text)
-    for m in acc_matches:
-        if m not in intel["bankAccounts"] and m not in intel["phoneNumbers"]:
-            intel["bankAccounts"].append(m)
+    # Extract bank accounts (10-18 digit numbers, excluding phones)
+    acc_matches = COMPILED_PATTERNS["bank_account"].findall(text)
+    for match in acc_matches:
+        if match not in intel["bankAccounts"] and match not in intel["phoneNumbers"]:
+            intel["bankAccounts"].append(match)
+            logger.info(f"Extracted bank account: {match}")
     
-    # Keywords
-    text_lower = text.lower()
+    # Extract suspicious keywords
+    text_lower = text.casefold()
     for kw in SCAM_KEYWORDS:
         if kw in text_lower and kw not in intel["suspiciousKeywords"]:
             intel["suspiciousKeywords"].append(kw)
 
 # ============================================================
-# AGENT RESPONSES (simple, no external API needed for fallback)
+# AGENT RESPONSE LOGIC
 # ============================================================
-
-NAIVE_RESPONSES = [
-    "Arey, mujhe samajh nahi aaya... Kya karna hai exactly?",
-    "Beta, main thoda confused hoon. Aap bank se ho? Kaise verify karoon?",
-    "Mera beta bola tha phone pe details mat dena... Aap pakka bank se ho?",
-    "Haan ji, par yeh sab mujhe samajh nahi aata. Aap explain karoge?",
-    "Account number kya hota hai? Woh jo ATM card pe likha hai?",
-    "OTP? Woh message aata hai na? Ek second, phone dhundhti hoon...",
-    "Aap sure ho na? Mere saath fraud toh nahi ho raha?",
-    "Theek hai, par pehle mujhe apna naam aur ID bataiye verification ke liye.",
-    "Main apne bete ko phone karti hoon, woh samjha dega mujhe.",
-    "Haan ji bol rahi hoon, aap bataiye kya karna hai step by step.",
-    "Mera account toh chal raha hai, abhi ATM se paisa nikala tha...",
-    "Acha acha, toh aap mujhe call karenge ya main karun?",
-    "Bank branch ka number do, main wahan jaake verify karti hoon.",
-    "Itni jaldi kyun? Kal nahi ho sakta yeh sab?",
-    "Okay okay, likhti hoon... Aap bolo slowly please."
-]
 
 def get_agent_response(session: dict, scammer_message: str) -> str:
-    """Get appropriate agent response"""
+    """
+    Get fallback agent response (when LLM unavailable or fails).
+    Rotates through naive responses based on message count.
+    """
     msg_count = session["messages_exchanged"]
-    
-    # Rotate through naive responses based on message count
     return NAIVE_RESPONSES[msg_count % len(NAIVE_RESPONSES)]
 
+# Suspicion replies - used when scam signals detected but not confirmed
+_SUSPICION_REPLIES = (
+    "Ji? Kaun bol raha hai? Mujhe koi message toh nahi aaya bank se...",
+    "Haan ji? Mera account ka kya hua? Aap kaun ho beta?",
+    "Arey? Bank se ho? Par bank toh kabhi phone nahi karta... aap pakka bank se ho?",
+    "Kya bol rahe ho? Account block? Abhi toh sab theek tha... aapka naam kya hai?",
+)
+
+def get_suspicion_reply() -> str:
+    """Reply when suspicion detected but not confirmed. Randomized for variety."""
+    import random
+    return random.choice(_SUSPICION_REPLIES)
+
 # ============================================================
-# GROQ AGENT (optional enhancement)
+# GROQ LLM INTEGRATION (Optional Enhancement)
 # ============================================================
 
 groq_client = None
 
-def init_groq():
-    """Initialize Groq client if available"""
+def init_groq() -> None:
+    """Initialize Groq client if API key available"""
     global groq_client
     try:
         from groq import Groq
         api_key = os.getenv("GROQ_API_KEY")
         if api_key:
             groq_client = Groq(api_key=api_key)
-    except:
-        pass
+            logger.info("Groq LLM initialized successfully")
+        else:
+            logger.warning("GROQ_API_KEY not found - using fallback responses")
+    except Exception as e:
+        logger.error(f"Failed to initialize Groq: {e}")
 
 init_groq()
 
-# FORBIDDEN PATTERNS - if LLM outputs any of these, use fallback
-FORBIDDEN_PATTERNS = [
-    "the user", "the scammer", "user wants", "scammer wants",
-    "training data", "output format", "instructions",
-    "i will", "i need to", "let me", "i should",
-    "as an ai", "as a language model", "i'm an ai",
-    "the victim", "the agent", "honeypot",
-    "generate", "scenario", "realistic", "respond with",
-    "here is", "here's the", "the response",
-    "i am calling from", "this is bank", "i am from bank",  # Never impersonate bank
-    "we need your", "please provide your", "share your"  # Never demand info like scammer
-]
-
 def get_llm_response(session: dict, scammer_message: str) -> str:
-    """Get LLM response if available, else fallback"""
+    """
+    Get LLM-generated response if available, else fallback.
+    Implements strict sanitization to prevent reasoning leakage.
+    """
     if not groq_client:
         return get_agent_response(session, scammer_message)
     
     try:
-        # Build minimal context
-        history = session["conversation"][-4:]  # Last 4 messages only
+        # Build minimal context (last 4 messages only)
+        history = session["conversation"][-4:]
         
+        # Determine conversation phase for adaptive prompting
+        msg_count = session["messages_exchanged"]
+        if msg_count <= 3:
+            phase_instruction = "You just received this call. Be CONFUSED and SUSPICIOUS. Ask who they are. Ask for their name and branch."
+        elif msg_count <= 7:
+            phase_instruction = "You are starting to believe them but still CONFUSED about tech terms. Stall for time. Look for your glasses. Search for pen. Ask them to repeat slowly."
+        elif msg_count <= 12:
+            phase_instruction = "You are almost ready to comply. ALMOST do what they ask but pause with doubt. Ask for their UPI ID or number so you can 'send' or 'verify'. Ask innocent questions that make them reveal information."
+        else:
+            phase_instruction = "You are getting doubtful again. Ask for their employee ID. Say your neighbor warned about fraud. Ask for branch number to verify. Keep them talking."
+
         messages = [
             {
                 "role": "system",
-                "content": """You ARE Kamla Devi. You are 62 years old. Retired school teacher from Jaipur.
-You speak Hinglish (Hindi-English mix). You are CONFUSED by technology.
+                "content": f"""You ARE Kamla Devi, 62 years old, retired Hindi teacher from Jaipur. Widow. Son Rohit is in Bangalore.
 
-SOMEONE CALLED claiming to be from bank about your account.
+Someone is calling about your bank account. You are CONFUSED by technology.
 
-YOU MUST:
-- Sound like a REAL elderly Indian aunty
-- Be CONFUSED and DOUBTFUL
-- Ask QUESTIONS to clarify
-- DELAY and STALL
-- Say "beta", "arey", "haan ji" naturally
-- NEVER understand technical terms easily
-- NEVER give OTP, PIN, or passwords
-- NEVER claim to be from any bank or company
-- NEVER demand information from the caller
+SPEAKING STYLE (CRITICAL — sound like a REAL Indian aunty, NOT a textbook):
+- Mix Hindi-English in SAME sentence: "Haan woh OTP aata hai na green wala message mein?"
+- Use naturally: "arey", "beta", "haan haan", "acha acha", "ek minute", "ruko ruko"
+- Rhetorical tags: "hai na?", "nahi kya?", "theek hai na?", "ho jayega na?"
+- Think out loud: "Pen kahan rakha tha... ruko... haan bolo likhti hoon..."
+- Repeat their terms confused: "UPI UPI... haan woh PhonePe wala na?"
+- Mispronounce tech: "passvord", "nett banking", "app wala"
+- Reference son: "Rohit bolta hai kisi ko mat dena... par aap toh bank se ho na?"
 
-YOU ARE THE VICTIM. You are RECEIVING the call. You are CONFUSED.
+CURRENT PHASE: {phase_instruction}
 
-RESPOND AS KAMLA DEVI ONLY. One short confused reply. No explanations."""
+RULES:
+- 1-2 sentences ONLY. Short, messy, natural.
+- NEVER give real OTP/PIN/password
+- NEVER break character
+- NEVER say "I will" or "Let me" (English-style)
+- NEVER write explanations or reasoning
+- Ask innocent questions that make them reveal details (UPI ID, number, link)
+- You can mention pension (₹38,000) or FD vaguely to keep them interested"""
             }
         ]
         
@@ -268,41 +443,45 @@ RESPOND AS KAMLA DEVI ONLY. One short confused reply. No explanations."""
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
-            max_tokens=60,
-            temperature=0.7
+            max_tokens=80,
+            temperature=0.8
         )
         
         reply = response.choices[0].message.content.strip()
         
-        # STRICT SANITIZATION - check all forbidden patterns
-        reply_lower = reply.lower()
+        # STRICT SANITIZATION - check forbidden patterns
+        reply_lower = reply.casefold()
         for pattern in FORBIDDEN_PATTERNS:
             if pattern in reply_lower:
-                print(f"[BLOCKED] Forbidden pattern '{pattern}' in: {reply[:50]}")
+                logger.warning(f"Blocked forbidden pattern '{pattern}' in LLM output")
                 return get_agent_response(session, scammer_message)
         
-        # Also block if reply is too long (likely reasoning leakage)
+        # Block overly long replies (likely reasoning leakage)
         if len(reply) > 200:
+            logger.warning(f"Blocked overly long LLM output ({len(reply)} chars)")
             return get_agent_response(session, scammer_message)
         
         return reply if reply else get_agent_response(session, scammer_message)
         
     except Exception as e:
-        print(f"[LLM Error] {e}")
+        logger.error(f"LLM error: {e}")
         return get_agent_response(session, scammer_message)
 
 # ============================================================
-# CALLBACK (mandatory, exactly once)
+# CALLBACK LOGIC
 # ============================================================
 
-async def send_callback(session_id: str, session: dict):
-    """Send final results to GUVI - exactly once"""
+async def send_callback(session_id: str, session: dict) -> None:
+    """
+    Send final results to GUVI callback endpoint.
+    Called exactly once per session when engagement completes.
+    """
     if session["callback_sent"]:
         return
     
     session["callback_sent"] = True  # Mark immediately to prevent retries
     
-    # Count REAL evidence (not keywords)
+    # Count real evidence (not just keywords)
     intel = session["extracted_intelligence"]
     evidence_count = (
         len(intel["upiIds"]) +
@@ -316,77 +495,72 @@ async def send_callback(session_id: str, session: dict):
         "scamDetected": session["scam_detected"],
         "totalMessagesExchanged": session["messages_exchanged"],
         "extractedIntelligence": session["extracted_intelligence"],
-        "agentNotes": f"AI agent engaged suspected scammer for {session['messages_exchanged']} message exchanges. Extracted {evidence_count} financial identifiers (UPI IDs, phone numbers, bank accounts, URLs)."
+        "agentNotes": f"AI agent engaged suspected scammer for {session['messages_exchanged']} message exchanges. "
+                      f"Extracted {evidence_count} financial identifiers (UPI IDs: {len(intel['upiIds'])}, "
+                      f"phone numbers: {len(intel['phoneNumbers'])}, bank accounts: {len(intel['bankAccounts'])}, "
+                      f"URLs: {len(intel['phishingLinks'])})."
     }
     
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(CALLBACK_URL, json=payload)
-            print(f"[Callback] Session {session_id}: {resp.status_code}")
+            logger.info(f"Callback sent for session {session_id}: HTTP {resp.status_code}")
+            logger.debug(f"Callback payload: {payload}")
     except Exception as e:
-        print(f"[Callback Error] {session_id}: {e}")
-        # Don't retry - already marked as sent
+        logger.error(f"Callback failed for session {session_id}: {e}")
 
 # ============================================================
-# SUSPICION REPLY (before full confirmation)
+# HELPER FUNCTIONS
 # ============================================================
 
-def get_suspicion_reply():
-    return "Ji? Aap kaun bol rahe ho? Mujhe thoda doubt ho raha hai, clear bataiye."
+def _extract_message_text(message: Union[str, MessageField, dict]) -> str:
+    """Extract message text from various input formats"""
+    if isinstance(message, str):
+        return message.strip()
+    elif isinstance(message, MessageField):
+        return message.text.strip()
+    elif isinstance(message, dict):
+        return (message.get("text", "") or message.get("content", "")).strip()
+    return ""
 
 # ============================================================
-# MAIN ENDPOINT - /api/honeypot
+# API ENDPOINTS
 # ============================================================
 
-@app.api_route("/api/honeypot", methods=["GET", "POST", "HEAD", "OPTIONS"])
-@app.api_route("/api/endpoint", methods=["GET", "POST", "HEAD", "OPTIONS"])
-async def honeypot(request: Request, background_tasks: BackgroundTasks):
+@app.post("/api/honeypot", response_model=HoneypotResponse)
+@app.post("/api/endpoint", response_model=HoneypotResponse)  # Backward compatibility
+async def honeypot(request: HoneypotRequest, background_tasks: BackgroundTasks) -> HoneypotResponse:
     """
-    Main honeypot endpoint.
-    Accepts anything, never fails, always returns {status, reply}
+    Main honeypot endpoint for scam detection and autonomous engagement.
+    
+    Accepts incoming message, detects scam intent, engages scammer using AI agent,
+    extracts intelligence, and triggers callback after sufficient engagement.
+    
+    Returns agent's response in character as confused elderly person.
     """
-    
-    # HEAD/OPTIONS - just return success
-    if request.method in ["HEAD", "OPTIONS"]:
-        return JSONResponse(content={"status": "success", "reply": "OK"})
-    
-    # GET - return status
-    if request.method == "GET":
-        return {"status": "success", "reply": "Hello. How can I help you?"}
-    
-    # POST - handle message
-    try:
-        body = await request.json()
-    except:
-        # Empty body or invalid JSON
-        return {"status": "success", "reply": "Hello. How can I help you?"}
-    
-    # Not a dict? Fallback
-    if not isinstance(body, dict):
-        return {"status": "success", "reply": "Hello. How can I help you?"}
-    
-    # Extract session ID
-    session_id = body.get("sessionId") or body.get("session_id") or f"auto-{uuid.uuid4().hex[:8]}"
-    
-    # Get session
+    session_id = request.sessionId
     session = get_session(session_id)
     
-    # If callback already sent for this session, return closing response
+    # If callback already sent, return closing response
     if session["callback_sent"]:
-        return {"status": "success", "reply": "Thank you for calling. Goodbye."}
+        logger.info(f"Session {session_id} already completed")
+        return HoneypotResponse(
+            status="success",
+            reply="Thank you for calling. Goodbye."
+        )
     
     # Extract message text
-    message_field = body.get("message", "")
-    if isinstance(message_field, dict):
-        message = message_field.get("text", "") or message_field.get("content", "")
-    else:
-        message = str(message_field) if message_field else ""
+    message = _extract_message_text(request.message)
     
-    # No message? Fallback
-    if not message or not message.strip():
-        return {"status": "success", "reply": "Hello. How can I help you?"}
+    # No message? Return default
+    if not message:
+        logger.warning(f"Empty message in session {session_id}")
+        return HoneypotResponse(
+            status="success",
+            reply="Hello. How can I help you?"
+        )
     
-    message = message.strip()
+    logger.info(f"Session {session_id} - Message {session['messages_exchanged'] + 1}: {message[:50]}...")
     
     # STEP 1: Detect scam (lightweight)
     if not session["scam_detected"]:
@@ -399,7 +573,8 @@ async def honeypot(request: Request, background_tasks: BackgroundTasks):
     if session["scam_detected"]:
         reply = get_llm_response(session, message)
     else:
-        keyword_hits = sum(1 for kw in SCAM_KEYWORDS if kw in message.lower())
+        # Show suspicion if multiple keywords present
+        keyword_hits = sum(1 for kw in SCAM_KEYWORDS if kw in message.casefold())
         if keyword_hits >= 2:
             reply = get_suspicion_reply()
         else:
@@ -414,7 +589,6 @@ async def honeypot(request: Request, background_tasks: BackgroundTasks):
     })
     
     # STEP 5: Check if should end session
-    # MUST have minimum 8 exchanges before considering end
     intel = session["extracted_intelligence"]
     has_enough_intel = (
         len(intel["upiIds"]) >= 1 or
@@ -424,32 +598,124 @@ async def honeypot(request: Request, background_tasks: BackgroundTasks):
     )
     
     should_end = (
-        # Hard cap reached
         session["messages_exchanged"] >= MAX_MESSAGES or
-        # Minimum reached AND meaningful intel extracted
         (session["messages_exchanged"] >= MIN_MESSAGES and has_enough_intel)
     )
     
     # STEP 6: Send callback if ending and scam detected
     if should_end and session["scam_detected"] and not session["callback_sent"]:
+        logger.info(f"Session {session_id} ending - triggering callback")
         background_tasks.add_task(send_callback, session_id, session)
     
-    # ALWAYS return exactly this format
-    return {"status": "success", "reply": reply}
+    return HoneypotResponse(status="success", reply=reply)
+
+@app.api_route("/api/honeypot", methods=["GET", "HEAD", "OPTIONS"])
+@app.api_route("/api/endpoint", methods=["GET", "HEAD", "OPTIONS"])
+async def honeypot_other_methods(request: Request) -> dict:
+    """Handle non-POST requests to honeypot endpoint"""
+    if request.method == "GET":
+        return {"status": "success", "reply": "Hello. How can I help you?"}
+    return {"status": "success", "reply": "OK"}
+
+@app.get("/", tags=["Health"])
+@app.get("/health", tags=["Health"])
+async def health() -> dict:
+    """Health check endpoint"""
+    return {
+        "status": "success",
+        "service": "ScamBait AI Honeypot",
+        "version": "1.0.0",
+        "groq_available": groq_client is not None
+    }
 
 # ============================================================
-# HEALTH ENDPOINTS
+# STARTUP EVENT
 # ============================================================
 
-@app.api_route("/", methods=["GET", "HEAD"])
-@app.api_route("/health", methods=["GET", "HEAD"])
-async def health():
-    return {"status": "success", "reply": "ScamBait AI is running."}
+@app.on_event("startup")
+async def startup_event():
+    """Log startup information"""
+    logger.info("=" * 60)
+    logger.info("ScamBait AI - Honeypot API Starting")
+    logger.info("=" * 60)
+    logger.info(f"Groq LLM: {'Available' if groq_client else 'Unavailable (using fallback)'}")
+    logger.info(f"Callback URL: {CALLBACK_URL}")
+    logger.info(f"Min/Max messages: {MIN_MESSAGES}/{MAX_MESSAGES}")
+    logger.info("Ready to engage scammers!")
+    logger.info("=" * 60)
 
 # ============================================================
-# RUN
+# MAIN ENTRY POINT
 # ============================================================
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# ============================================================
+# TESTING INSTRUCTIONS
+# ============================================================
+
+"""
+TESTING THE API:
+
+1. START SERVER:
+   uvicorn api:app --reload --host 0.0.0.0 --port 8000
+
+2. SWAGGER UI (Interactive Documentation):
+   Open: http://localhost:8000/docs
+   - Click POST /api/honeypot
+   - Click "Try it out"
+   - Use pre-filled example or modify
+   - Click "Execute"
+   - Verify response: {"status":"success","reply":"..."}
+
+3. CURL TESTING (Command Line):
+
+   # Test with message object format
+   curl -X POST "http://localhost:8000/api/honeypot" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "sessionId": "test-001",
+       "message": {
+         "text": "Your bank account is blocked! Send UPI to scammer@paytm now!"
+       }
+     }'
+
+   # Test with simple string format
+   curl -X POST "http://localhost:8000/api/honeypot" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "sessionId": "test-002",
+       "message": "Urgent! Verify at http://fake-bank.com or call 9876543210"
+     }'
+
+   # Test conversation continuation (with history)
+   curl -X POST "http://localhost:8000/api/honeypot" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "sessionId": "test-001",
+       "message": {"text": "Give me your OTP now!"},
+       "conversationHistory": [
+         {"sender": "scammer", "text": "Your account is blocked"},
+         {"sender": "user", "text": "Why is it blocked?"}
+       ]
+     }'
+
+4. ENVIRONMENT VARIABLES (.env file):
+   GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxx
+   HONEYPOT_API_KEY=your-secure-api-key-here
+
+5. TRIGGER CALLBACK:
+   Send 8+ messages in same session with scam patterns
+   Check logs for "Callback sent for session..."
+
+6. HEALTH CHECK:
+   curl http://localhost:8000/health
+
+EXPECTED OUTPUT:
+{
+  "status": "success",
+  "reply": "Arey beta, main thoda confused hoon..."
+}
+"""
