@@ -149,12 +149,28 @@ class HoneypotResponse(BaseModel):
     """Response model for honeypot endpoint"""
     status: str = Field(default="success", description="Always 'success' — API never returns errors")
     reply: str = Field(..., description="AI persona's in-character reply to the scammer (natural Hinglish)")
+    persona: Optional[str] = Field(default=None, description="Which AI persona is responding (Kamla Devi, Amit Verma, etc.)")
+    scamDetected: Optional[bool] = Field(default=None, description="Whether scam intent was detected")
+    messagesExchanged: Optional[int] = Field(default=None, description="Total messages in this session so far")
+    callbackSent: Optional[str] = Field(default=None, description="Callback status — shows when intelligence report was sent to GUVI endpoint")
+    extractedIntelligence: Optional[Dict] = Field(default=None, description="Evidence extracted so far (UPI IDs, phones, URLs)")
 
     model_config = {
         "json_schema_extra": {
             "example": {
                 "status": "success",
-                "reply": "Arey beta, account block ho jayega? Aap kaun se bank se bol rahe ho?"
+                "reply": "Arey beta, account block ho jayega? Aap kaun se bank se bol rahe ho?",
+                "persona": "Kamla Devi",
+                "scamDetected": True,
+                "messagesExchanged": 3,
+                "callbackSent": None,
+                "extractedIntelligence": {
+                    "upiIds": ["claim@paytm"],
+                    "phoneNumbers": ["9876543210"],
+                    "phishingLinks": [],
+                    "bankAccounts": [],
+                    "suspiciousKeywords": ["lottery", "urgent"]
+                }
             }
         }
     }
@@ -701,13 +717,14 @@ RULES:
 # CALLBACK LOGIC
 # ============================================================
 
-async def send_callback(session_id: str, session: dict) -> None:
+async def send_callback(session_id: str, session: dict) -> str:
     """
     Send final results to GUVI callback endpoint.
     Called exactly once per session when engagement completes.
+    Returns status string for API response.
     """
     if session["callback_sent"]:
-        return
+        return "Already sent"
     
     session["callback_sent"] = True  # Mark immediately to prevent retries
     
@@ -737,8 +754,10 @@ async def send_callback(session_id: str, session: dict) -> None:
             resp = await client.post(CALLBACK_URL, json=payload)
             logger.info(f"Callback sent for session {session_id}: HTTP {resp.status_code}")
             logger.debug(f"Callback payload: {payload}")
+            return f"POST {CALLBACK_URL} -> HTTP {resp.status_code}"
     except Exception as e:
         logger.error(f"Callback failed for session {session_id}: {e}")
+        return f"FAILED: {e}"
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -787,7 +806,12 @@ async def honeypot(
         logger.info(f"Session {session_id} already completed (state={session.get('state')})")
         return HoneypotResponse(
             status="success",
-            reply="Thank you for calling. Goodbye."
+            reply="Thank you for calling. Goodbye.",
+            persona=session.get("persona_name"),
+            scamDetected=session["scam_detected"],
+            messagesExchanged=session["messages_exchanged"],
+            callbackSent="Already sent",
+            extractedIntelligence=session["extracted_intelligence"]
         )
     
     # Extract message text
@@ -854,12 +878,21 @@ async def honeypot(
     should_end = not should_continue(session)
     
     # STEP 6: Send callback if ending and scam detected
+    callback_status = None
     if should_end and session["scam_detected"] and not session["callback_sent"]:
         session["state"] = "terminated"
         logger.info(f"Session {session_id} ending - state=terminated, triggering callback")
-        background_tasks.add_task(send_callback, session_id, session)
+        callback_status = await send_callback(session_id, session)
     
-    return HoneypotResponse(status="success", reply=reply)
+    return HoneypotResponse(
+        status="success",
+        reply=reply,
+        persona=session.get("persona_name"),
+        scamDetected=session["scam_detected"],
+        messagesExchanged=session["messages_exchanged"],
+        callbackSent=callback_status,
+        extractedIntelligence=session["extracted_intelligence"]
+    )
 
 @app.get("/api/session/{session_id}", tags=["Debug"])
 async def get_session_info(session_id: str) -> dict:
