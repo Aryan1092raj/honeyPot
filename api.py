@@ -343,50 +343,52 @@ def get_phase_instruction(session: dict) -> str:
 def detect_scam(text: str) -> bool:
     """
     Detect scam intent using multiple signals.
-    Requires at least 2 independent signals to confirm scam.
-    
-    Special handling for lottery scams (instant detection).
+    Special handling for lottery scams (very common in India).
     """
     hits = 0
     text_lower = text.casefold()
     
-    # SPECIAL CASE: Lottery scams (very common, easy to detect)
-    lottery_indicators = ["lottery", "prize", "won", "winner", "congratulations", "claim", "jackpot"]
-    amount_indicators = ["lakh", "crore", "₹", "rupees", "rs"]
+    # SPECIAL CASE: LOTTERY SCAMS (instant detection)
+    lottery_keywords = ["lottery", "prize", "won", "winner", "congratulations", 
+                        "claim", "jackpot", "lucky draw"]
+    amount_keywords = ["lakh", "crore", "₹", "rupees", "rs.", "rs ", "inr"]
     
-    has_lottery = any(ind in text_lower for ind in lottery_indicators)
-    has_amount = any(amt in text_lower for amt in amount_indicators)
+    has_lottery = any(kw in text_lower for kw in lottery_keywords)
+    has_amount = any(amt in text_lower for amt in amount_keywords)
     
     if has_lottery and has_amount:
-        logger.info("Lottery scam detected (lottery keyword + amount)")
-        return True  # Instant detection
+        logger.info("Lottery scam detected instantly")
+        return True  # ← INSTANT DETECTION
     
-    # Signal 1: Multiple keyword hits
+    # SPECIAL CASE: FINANCIAL URGENCY (instant detection)
+    urgency_keywords = ["urgent", "immediately", "blocked", "suspended", "expire"]
+    financial_keywords = ["send", "pay", "transfer", "₹", "rupees", "amount"]
+    
+    has_urgency = any(kw in text_lower for kw in urgency_keywords)
+    has_financial = any(kw in text_lower for kw in financial_keywords)
+    
+    if has_urgency and has_financial:
+        logger.info("Financial urgency scam detected")
+        return True  # ← INSTANT DETECTION
+    
+    # GENERAL DETECTION (multiple signals)
     keyword_hits = sum(1 for kw in SCAM_KEYWORDS if kw in text_lower)
     if keyword_hits >= 2:
         hits += 1
-        logger.debug(f"Keyword signal: {keyword_hits} keywords found")
     
-    # Signal 2: UPI pattern
     if COMPILED_PATTERNS["upi"].search(text):
         hits += 1
-        logger.debug("UPI signal detected")
     
-    # Signal 3: Phone pattern
     if COMPILED_PATTERNS["phone"].search(text):
         hits += 1
-        logger.debug("Phone signal detected")
     
-    # Signal 4: URL pattern
     if COMPILED_PATTERNS["url"].search(text):
         hits += 1
-        logger.debug("URL signal detected")
     
     is_scam = hits >= 2
+    
     if is_scam:
-        logger.info(f"Scam detected with {hits} signals (threshold: 2)")
-    else:
-        logger.debug(f"Not enough signals ({hits}/2) - treating as non-scam")
+        logger.info(f"Scam detected with {hits} signals")
     
     return is_scam
 
