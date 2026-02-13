@@ -50,61 +50,196 @@ class MessageField(BaseModel):
 
 class HoneypotRequest(BaseModel):
     """Request model for honeypot endpoint"""
-    sessionId: str = Field(..., description="Unique session identifier", example="wertyu-dfghj-ertyui")
+    sessionId: str = Field(
+        ..., 
+        description="Unique session ID. Use the SAME ID for follow-up messages in one conversation.",
+        examples=["test-lottery-001", "wertyu-dfghj-ertyui"]
+    )
     message: Union[str, MessageField] = Field(
         ..., 
-        description="Message from suspected scammer (string or object)",
+        description="Scammer's message. Can be a plain string or an object with text/sender/timestamp.",
     )
     conversationHistory: Optional[List[Dict]] = Field(
         default=[], 
-        description="Previous messages in conversation"
+        description="(Optional) Previous messages. Format: [{sender: 'scammer', text: '...'}, {sender: 'user', text: '...'}]"
     )
     metadata: Optional[Dict] = Field(
         default={},
-        description="Additional context (channel, language, etc.)"
+        description="(Optional) Extra context like channel, language, locale"
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "sessionId": "wertyu-dfghj-ertyui",
-                "message": {
-                    "sender": "scammer",
-                    "text": "Your bank account will be blocked today. Verify immediately.",
-                    "timestamp": 1770005528731
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Lottery Scam (triggers Amit Verma persona)",
+                    "value": {
+                        "sessionId": "test-lottery-001",
+                        "message": {
+                            "sender": "scammer",
+                            "text": "Congratulations! You won Rs.25 lakh lottery. Pay Rs.5000 processing fee to claim@paytm",
+                            "timestamp": 1770005528731
+                        },
+                        "conversationHistory": [],
+                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+                    }
                 },
-                "conversationHistory": [],
-                "metadata": {
-                    "channel": "SMS",
-                    "language": "English",
-                    "locale": "IN"
+                {
+                    "summary": "Bank KYC Scam (triggers Kamla Devi persona)",
+                    "value": {
+                        "sessionId": "test-kyc-001",
+                        "message": {
+                            "sender": "scammer",
+                            "text": "Dear customer your SBI account will be blocked today. Update KYC immediately or call 9876543210",
+                            "timestamp": 1770005528731
+                        },
+                        "conversationHistory": [],
+                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+                    }
+                },
+                {
+                    "summary": "Investment Scam (triggers Rajesh Kumar persona)",
+                    "value": {
+                        "sessionId": "test-invest-001",
+                        "message": {
+                            "sender": "scammer",
+                            "text": "Sir guaranteed 50 percent returns monthly. Invest Rs.1 lakh in our mutual fund scheme. SEBI approved.",
+                            "timestamp": 1770005528731
+                        },
+                        "conversationHistory": [],
+                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+                    }
+                },
+                {
+                    "summary": "Credit Card Scam (triggers Priya Sharma persona)",
+                    "value": {
+                        "sessionId": "test-cc-001",
+                        "message": {
+                            "sender": "scammer",
+                            "text": "Your credit card has unauthorized transaction of Rs.49999. Click http://verify-card.com to block or share OTP",
+                            "timestamp": 1770005528731
+                        },
+                        "conversationHistory": [],
+                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+                    }
+                },
+                {
+                    "summary": "Follow-up message (same session, with history)",
+                    "value": {
+                        "sessionId": "test-lottery-001",
+                        "message": {
+                            "sender": "scammer",
+                            "text": "Send Rs.5000 to claim@paytm quickly. Offer expires in 1 hour.",
+                            "timestamp": 1770005528732
+                        },
+                        "conversationHistory": [
+                            {"sender": "scammer", "text": "You won Rs.25 lakh lottery!"},
+                            {"sender": "user", "text": "Bro seriously? Kaise mila yeh?"}
+                        ],
+                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+                    }
                 }
-            }
+            ]
         }
+    }
 
 class HoneypotResponse(BaseModel):
     """Response model for honeypot endpoint"""
-    status: str = Field(default="success", description="Status of the request")
-    reply: str = Field(..., description="Agent's response to the scammer")
+    status: str = Field(default="success", description="Always 'success' — API never returns errors")
+    reply: str = Field(..., description="AI persona's in-character reply to the scammer (natural Hinglish)")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "status": "success",
-                "reply": "Why is my account being suspended?"
-            }
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "Kamla Devi (elderly) response",
+                    "value": {"status": "success", "reply": "Arey beta, account block ho jayega? Aap kaun se bank se bol rahe ho?"}
+                },
+                {
+                    "summary": "Amit Verma (student) response",
+                    "value": {"status": "success", "reply": "Bro seriously? Rs.25 lakh? Par processing fee kitna hai yaar?"}
+                }
+            ]
         }
+    }
 
 # ============================================================
 # APP SETUP
 # ============================================================
 
+API_DESCRIPTION = """
+## ScamBait AI — Autonomous Scam Honeypot API
+
+Send a scammer's message → Get a realistic in-character reply that keeps them talking.
+
+---
+
+### Quick Start (copy-paste into "Try it out")
+
+**Lottery scam:**
+```json
+{
+  "sessionId": "test-lottery-001",
+  "message": {
+    "sender": "scammer",
+    "text": "Congratulations! You won Rs.25 lakh lottery. Pay Rs.5000 processing fee to claim@paytm",
+    "timestamp": 1770005528731
+  },
+  "conversationHistory": [],
+  "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+}
+```
+
+**Bank KYC scam:**
+```json
+{
+  "sessionId": "test-kyc-001",
+  "message": {
+    "sender": "scammer",
+    "text": "Dear customer your SBI account will be blocked today. Update KYC immediately or call 9876543210",
+    "timestamp": 1770005528731
+  },
+  "conversationHistory": [],
+  "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+}
+```
+
+---
+
+### How it works
+1. **POST** a scammer message to `/api/honeypot`
+2. AI detects scam type (lottery, KYC, investment, etc.)
+3. Auto-selects one of **4 personas** (elderly woman, student, businessman, professional)
+4. Returns a natural Hinglish reply that keeps the scammer engaged
+5. Silently extracts UPI IDs, phone numbers, URLs as evidence
+6. After 8-20 messages, sends intelligence report via callback
+
+### 4 AI Personas
+| Persona | Age | Targets | Style |
+|---------|-----|---------|-------|
+| **Kamla Devi** | 60 | Bank/KYC/Police scams | Confused elderly, Hinglish |
+| **Amit Verma** | 22 | Lottery/Prize scams | Excited student, casual |
+| **Rajesh Kumar** | 45 | Investment schemes | Skeptical businessman |
+| **Priya Sharma** | 28 | Credit card/Tech scams | Smart professional |
+
+### Tips
+- Use a **unique sessionId** per conversation (UUID or any string)
+- Send **follow-up messages** with the **same sessionId** to continue the conversation
+- The `message` field accepts a string OR an object with `text`, `sender`, `timestamp`
+- Check `/api/session/{sessionId}` to see extracted intelligence mid-conversation
+"""
+
 app = FastAPI(
     title="ScamBait AI - Honeypot API",
-    description="AI-powered scam honeypot for autonomous engagement and intelligence extraction",
+    description=API_DESCRIPTION,
     version="1.0.0",
     docs_url="/docs",
-    redoc_url=None
+    redoc_url=None,
+    openapi_tags=[
+        {"name": "Honeypot", "description": "Main scam engagement endpoint — send scammer messages here"},
+        {"name": "Debug", "description": "Inspect active sessions and extracted intelligence"},
+        {"name": "Health", "description": "Server health checks"},
+    ]
 )
 
 app.add_middleware(
@@ -627,16 +762,23 @@ def _extract_message_text(message: Union[str, MessageField, dict]) -> str:
 # API ENDPOINTS
 # ============================================================
 
-@app.post("/api/honeypot", response_model=HoneypotResponse)
-@app.post("/api/endpoint", response_model=HoneypotResponse)  # Backward compatibility
+@app.post("/api/honeypot", response_model=HoneypotResponse, tags=["Honeypot"])
+@app.post("/api/endpoint", response_model=HoneypotResponse, include_in_schema=False)
 async def honeypot(request: HoneypotRequest, background_tasks: BackgroundTasks) -> HoneypotResponse:
     """
-    Main honeypot endpoint for scam detection and autonomous engagement.
-    
-    Accepts incoming message, detects scam intent, engages scammer using AI agent,
-    extracts intelligence, and triggers callback after sufficient engagement.
-    
-    Returns agent's response in character as confused elderly person.
+    Send a scammer's message → Get an AI persona reply
+
+    **What happens internally:**
+    1. Detects scam type (lottery, KYC, investment, credit card, etc.)
+    2. Auto-selects the best persona to engage this scam type
+    3. Generates a natural Hinglish reply using Groq LLM
+    4. Silently extracts evidence (UPI IDs, phone numbers, URLs)
+    5. After 8-20 exchanges, sends intelligence report via callback
+
+    **How to test:**
+    - Click **Try it out** → pick an example from the dropdown → click **Execute**
+    - Use the SAME `sessionId` to send follow-up messages
+    - Check `/api/session/{sessionId}` to see extracted intelligence
     """
     session_id = request.sessionId
     session = get_session(session_id)
@@ -720,28 +862,68 @@ async def honeypot(request: HoneypotRequest, background_tasks: BackgroundTasks) 
     
     return HoneypotResponse(status="success", reply=reply)
 
-@app.get("/api/honeypot")
-@app.head("/api/honeypot")
-@app.options("/api/honeypot")
-@app.get("/api/endpoint")
-@app.head("/api/endpoint")
-@app.options("/api/endpoint")
+@app.get("/api/session/{session_id}", tags=["Debug"])
+async def get_session_info(session_id: str) -> dict:
+    """
+    View session state and extracted intelligence
+
+    Use this after sending messages to see what the AI detected and extracted.
+    Pass the same `sessionId` you used in `/api/honeypot`.
+    """
+    if session_id not in sessions:
+        return {"error": "Session not found", "hint": "Send a message to /api/honeypot first with this sessionId"}
+    s = sessions[session_id]
+    return {
+        "sessionId": session_id,
+        "scamDetected": s["scam_detected"],
+        "persona": s.get("persona_name", "Not assigned yet"),
+        "state": s["state"],
+        "messagesExchanged": s["messages_exchanged"],
+        "extractedIntelligence": s["extracted_intelligence"],
+        "callbackSent": s["callback_sent"],
+        "conversation": s["conversation"][-5:]  # last 5 exchanges
+    }
+
+@app.get("/api/sessions", tags=["Debug"])
+async def list_sessions() -> dict:
+    """
+    List all active sessions (summary)
+
+    Shows session IDs, message counts, and detected scam status.
+    """
+    summary = []
+    for sid, s in sessions.items():
+        summary.append({
+            "sessionId": sid,
+            "persona": s.get("persona_name", "-"),
+            "messages": s["messages_exchanged"],
+            "scamDetected": s["scam_detected"],
+            "state": s["state"]
+        })
+    return {"activeSessions": len(summary), "sessions": summary}
+
+@app.get("/api/honeypot", tags=["Honeypot"])
+@app.head("/api/honeypot", include_in_schema=False)
+@app.options("/api/honeypot", include_in_schema=False)
+@app.get("/api/endpoint", include_in_schema=False)
+@app.head("/api/endpoint", include_in_schema=False)
+@app.options("/api/endpoint", include_in_schema=False)
 async def honeypot_other_methods(request: Request) -> dict:
-    """Handle non-POST requests to honeypot endpoint"""
+    """Check if honeypot is active (GET). Use POST to send scammer messages."""
     if request.method == "GET":
-        return {"status": "success", "reply": "ScamBait AI Honeypot is active"}
+        return {"status": "success", "reply": "ScamBait AI Honeypot is active. Use POST to send scammer messages."}
     return {"status": "success", "reply": "OK"}
 
 @app.get("/", tags=["Health"])
-@app.head("/", tags=["Health"])
+@app.head("/", tags=["Health"], include_in_schema=False)
 async def root() -> dict:
-    """Root endpoint"""
-    return {"status": "success", "reply": "ScamBait AI is running"}
+    """Root — confirms API is running"""
+    return {"status": "success", "reply": "ScamBait AI is running. Go to /docs for interactive testing."}
 
 @app.get("/health", tags=["Health"])
-@app.head("/health", tags=["Health"])
+@app.head("/health", tags=["Health"], include_in_schema=False)
 async def health() -> dict:
-    """Health check endpoint"""
+    """Server health check — shows Groq LLM status and active session count"""
     return {
         "status": "healthy",
         "service": "ScamBait AI Honeypot",
