@@ -10,7 +10,7 @@ autonomously, and extracts intelligence without revealing detection.
 # IMPORTS & CONFIGURATION
 # ============================================================
 
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks, Body
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -53,7 +53,6 @@ class HoneypotRequest(BaseModel):
     sessionId: str = Field(
         ..., 
         description="Unique session ID. Use the SAME ID for follow-up messages in one conversation.",
-        examples=["test-lottery-001", "wertyu-dfghj-ertyui"]
     )
     message: Union[str, MessageField] = Field(
         ..., 
@@ -68,80 +67,83 @@ class HoneypotRequest(BaseModel):
         description="(Optional) Extra context like channel, language, locale"
     )
 
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "summary": "Lottery Scam (triggers Amit Verma persona)",
-                    "value": {
-                        "sessionId": "test-lottery-001",
-                        "message": {
-                            "sender": "scammer",
-                            "text": "Congratulations! You won Rs.25 lakh lottery. Pay Rs.5000 processing fee to claim@paytm",
-                            "timestamp": 1770005528731
-                        },
-                        "conversationHistory": [],
-                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
-                    }
-                },
-                {
-                    "summary": "Bank KYC Scam (triggers Kamla Devi persona)",
-                    "value": {
-                        "sessionId": "test-kyc-001",
-                        "message": {
-                            "sender": "scammer",
-                            "text": "Dear customer your SBI account will be blocked today. Update KYC immediately or call 9876543210",
-                            "timestamp": 1770005528731
-                        },
-                        "conversationHistory": [],
-                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
-                    }
-                },
-                {
-                    "summary": "Investment Scam (triggers Rajesh Kumar persona)",
-                    "value": {
-                        "sessionId": "test-invest-001",
-                        "message": {
-                            "sender": "scammer",
-                            "text": "Sir guaranteed 50 percent returns monthly. Invest Rs.1 lakh in our mutual fund scheme. SEBI approved.",
-                            "timestamp": 1770005528731
-                        },
-                        "conversationHistory": [],
-                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
-                    }
-                },
-                {
-                    "summary": "Credit Card Scam (triggers Priya Sharma persona)",
-                    "value": {
-                        "sessionId": "test-cc-001",
-                        "message": {
-                            "sender": "scammer",
-                            "text": "Your credit card has unauthorized transaction of Rs.49999. Click http://verify-card.com to block or share OTP",
-                            "timestamp": 1770005528731
-                        },
-                        "conversationHistory": [],
-                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
-                    }
-                },
-                {
-                    "summary": "Follow-up message (same session, with history)",
-                    "value": {
-                        "sessionId": "test-lottery-001",
-                        "message": {
-                            "sender": "scammer",
-                            "text": "Send Rs.5000 to claim@paytm quickly. Offer expires in 1 hour.",
-                            "timestamp": 1770005528732
-                        },
-                        "conversationHistory": [
-                            {"sender": "scammer", "text": "You won Rs.25 lakh lottery!"},
-                            {"sender": "user", "text": "Bro seriously? Kaise mila yeh?"}
-                        ],
-                        "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
-                    }
-                }
-            ]
+
+# OpenAPI examples for Swagger UI dropdown (used in endpoint Body() parameter)
+HONEYPOT_EXAMPLES = {
+    "Lottery Scam (Amit Verma)": {
+        "summary": "Lottery scam - triggers excited student persona",
+        "description": "Scammer claims victim won a lottery. AI responds as Amit Verma (22yo student).",
+        "value": {
+            "sessionId": "test-lottery-001",
+            "message": {
+                "sender": "scammer",
+                "text": "Congratulations! You won Rs.25 lakh lottery. Pay Rs.5000 processing fee to claim@paytm",
+                "timestamp": 1770005528731
+            },
+            "conversationHistory": [],
+            "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+        }
+    },
+    "Bank KYC Scam (Kamla Devi)": {
+        "summary": "KYC/bank block scam - triggers confused elderly persona",
+        "description": "Scammer threatens account block. AI responds as Kamla Devi (60yo retired teacher).",
+        "value": {
+            "sessionId": "test-kyc-001",
+            "message": {
+                "sender": "scammer",
+                "text": "Dear customer your SBI account will be blocked today. Update KYC immediately or call 9876543210",
+                "timestamp": 1770005528731
+            },
+            "conversationHistory": [],
+            "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+        }
+    },
+    "Investment Scam (Rajesh Kumar)": {
+        "summary": "Investment scheme - triggers skeptical businessman persona",
+        "description": "Scammer pitches fake investment. AI responds as Rajesh Kumar (45yo business owner).",
+        "value": {
+            "sessionId": "test-invest-001",
+            "message": {
+                "sender": "scammer",
+                "text": "Sir guaranteed 50 percent returns monthly. Invest Rs.1 lakh in our mutual fund scheme. SEBI approved.",
+                "timestamp": 1770005528731
+            },
+            "conversationHistory": [],
+            "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+        }
+    },
+    "Credit Card Scam (Priya Sharma)": {
+        "summary": "Credit card fraud - triggers smart professional persona",
+        "description": "Scammer claims unauthorized transaction. AI responds as Priya Sharma (28yo professional).",
+        "value": {
+            "sessionId": "test-cc-001",
+            "message": {
+                "sender": "scammer",
+                "text": "Your credit card has unauthorized transaction of Rs.49999. Click http://verify-card.com to block or share OTP",
+                "timestamp": 1770005528731
+            },
+            "conversationHistory": [],
+            "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+        }
+    },
+    "Follow-up Message (same session)": {
+        "summary": "Continue an existing conversation with history",
+        "description": "Send a follow-up message using the same sessionId. Include conversationHistory.",
+        "value": {
+            "sessionId": "test-lottery-001",
+            "message": {
+                "sender": "scammer",
+                "text": "Send Rs.5000 to claim@paytm quickly. Offer expires in 1 hour.",
+                "timestamp": 1770005528732
+            },
+            "conversationHistory": [
+                {"sender": "scammer", "text": "You won Rs.25 lakh lottery!"},
+                {"sender": "user", "text": "Bro seriously? Kaise mila yeh?"}
+            ],
+            "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
         }
     }
+}
 
 class HoneypotResponse(BaseModel):
     """Response model for honeypot endpoint"""
@@ -150,16 +152,10 @@ class HoneypotResponse(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [
-                {
-                    "summary": "Kamla Devi (elderly) response",
-                    "value": {"status": "success", "reply": "Arey beta, account block ho jayega? Aap kaun se bank se bol rahe ho?"}
-                },
-                {
-                    "summary": "Amit Verma (student) response",
-                    "value": {"status": "success", "reply": "Bro seriously? Rs.25 lakh? Par processing fee kitna hai yaar?"}
-                }
-            ]
+            "example": {
+                "status": "success",
+                "reply": "Arey beta, account block ho jayega? Aap kaun se bank se bol rahe ho?"
+            }
         }
     }
 
@@ -764,7 +760,10 @@ def _extract_message_text(message: Union[str, MessageField, dict]) -> str:
 
 @app.post("/api/honeypot", response_model=HoneypotResponse, tags=["Honeypot"])
 @app.post("/api/endpoint", response_model=HoneypotResponse, include_in_schema=False)
-async def honeypot(request: HoneypotRequest, background_tasks: BackgroundTasks) -> HoneypotResponse:
+async def honeypot(
+    request: HoneypotRequest = Body(..., openapi_examples=HONEYPOT_EXAMPLES),
+    background_tasks: BackgroundTasks = None,
+) -> HoneypotResponse:
     """
     Send a scammer's message → Get an AI persona reply
 
