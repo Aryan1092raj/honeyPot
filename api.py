@@ -46,7 +46,7 @@ class MessageField(BaseModel):
     """Message can be either a string or an object with text field"""
     text: str = Field(..., description="The message content")
     sender: Optional[str] = Field(default="scammer", description="Message sender")
-    timestamp: Optional[int] = Field(default=None, description="Epoch timestamp in ms")
+    timestamp: Optional[Union[int, str]] = Field(default=None, description="Epoch timestamp in ms or ISO string")
 
 class HoneypotRequest(BaseModel):
     """Request model for honeypot endpoint"""
@@ -153,7 +153,9 @@ class HoneypotResponse(BaseModel):
     scamDetected: Optional[bool] = Field(default=None, description="Whether scam intent was detected")
     messagesExchanged: Optional[int] = Field(default=None, description="Total messages in this session so far")
     callbackSent: Optional[str] = Field(default=None, description="Callback status — shows when intelligence report was sent to GUVI endpoint")
-    extractedIntelligence: Optional[Dict] = Field(default=None, description="Evidence extracted so far (UPI IDs, phones, URLs)")
+    extractedIntelligence: Optional[Dict] = Field(default=None, description="Evidence extracted so far (UPI IDs, phones, URLs, emails)")
+    engagementMetrics: Optional[Dict] = Field(default=None, description="Engagement duration and message count metrics")
+    agentNotes: Optional[str] = Field(default=None, description="AI agent's analysis summary of the scam interaction")
 
     model_config = {
         "json_schema_extra": {
@@ -169,8 +171,14 @@ class HoneypotResponse(BaseModel):
                     "phoneNumbers": ["9876543210"],
                     "phishingLinks": [],
                     "bankAccounts": [],
+                    "emailAddresses": [],
                     "suspiciousKeywords": ["lottery", "urgent"]
-                }
+                },
+                "engagementMetrics": {
+                    "totalMessagesExchanged": 3,
+                    "engagementDurationSeconds": 45
+                },
+                "agentNotes": "Scammer claiming to be from bank. Extracted UPI ID and phone number."
             }
         }
     }
@@ -364,7 +372,8 @@ COMPILED_PATTERNS = {
     "upi": re.compile(r'[a-zA-Z0-9._-]+@[a-zA-Z]+'),
     "phone": re.compile(r'\+91[\s-]?\d{10}|\b\d{10}\b'),
     "url": re.compile(r'https?://[^\s]+|www\.[^\s]+', re.IGNORECASE),
-    "bank_account": re.compile(r'\b\d{10,18}\b')
+    "bank_account": re.compile(r'\b\d{10,18}\b'),
+    "email": re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
 }
 
 # ============================================================
@@ -397,9 +406,11 @@ def get_session(session_id: str) -> dict:
                 "upiIds": [],
                 "phishingLinks": [],
                 "phoneNumbers": [],
+                "emailAddresses": [],
                 "suspiciousKeywords": []
             },
             "callback_sent": False,
+            "start_time": time.time(),
             "last_activity": time.time(),
             "conversation": []
         }
@@ -550,10 +561,19 @@ def extract_intelligence(text: str, session: dict) -> None:
     """
     intel = session["extracted_intelligence"]
     
-    # Extract UPI IDs
+    # Extract email addresses (must have TLD like .com, .in, .org)
+    email_matches = COMPILED_PATTERNS["email"].findall(text)
+    for match in email_matches:
+        if match not in intel["emailAddresses"]:
+            intel["emailAddresses"].append(match)
+            logger.info(f"Extracted email: {match}")
+
+    # Extract UPI IDs (exclude anything already captured as email)
     upi_matches = COMPILED_PATTERNS["upi"].findall(text)
     for match in upi_matches:
-        if match not in intel["upiIds"]:
+        # Skip if this is part of an email address
+        is_email_fragment = any(match in email for email in intel["emailAddresses"])
+        if match not in intel["upiIds"] and not is_email_fragment:
             intel["upiIds"].append(match)
             logger.info(f"Extracted UPI ID: {match}")
     
@@ -574,8 +594,13 @@ def extract_intelligence(text: str, session: dict) -> None:
     
     # Extract bank accounts (10-18 digit numbers, excluding phones)
     acc_matches = COMPILED_PATTERNS["bank_account"].findall(text)
+    # Build set of raw phone digits for dedup
+    phone_digits = set()
+    for pn in intel["phoneNumbers"]:
+        phone_digits.add(re.sub(r'[^0-9]', '', pn))          # full digits
+        phone_digits.add(re.sub(r'[^0-9]', '', pn)[-10:])    # last 10 digits
     for match in acc_matches:
-        if match not in intel["bankAccounts"] and match not in intel["phoneNumbers"]:
+        if match not in intel["bankAccounts"] and match not in phone_digits:
             intel["bankAccounts"].append(match)
             logger.info(f"Extracted bank account: {match}")
     
@@ -737,16 +762,23 @@ async def send_callback(session_id: str, session: dict) -> str:
         len(intel["phishingLinks"])
     )
     
+    duration_seconds = int(time.time() - session.get("start_time", time.time()))
+    
     payload = {
         "sessionId": session_id,
+        "status": "success",
         "scamDetected": session["scam_detected"],
         "totalMessagesExchanged": session["messages_exchanged"],
         "extractedIntelligence": session["extracted_intelligence"],
-        "agentNotes": f"AI agent engaged suspected scammer for {session['messages_exchanged']} message exchanges. "
-                      f"Final state: {session.get('state', 'unknown')}. "
+        "engagementMetrics": {
+            "totalMessagesExchanged": session["messages_exchanged"],
+            "engagementDurationSeconds": duration_seconds
+        },
+        "agentNotes": f"AI agent engaged suspected scammer for {session['messages_exchanged']} message exchanges "
+                      f"over {duration_seconds}s. Final state: {session.get('state', 'unknown')}. "
                       f"Extracted {evidence_count} financial identifiers (UPI IDs: {len(intel['upiIds'])}, "
                       f"phone numbers: {len(intel['phoneNumbers'])}, bank accounts: {len(intel['bankAccounts'])}, "
-                      f"URLs: {len(intel['phishingLinks'])})."
+                      f"URLs: {len(intel['phishingLinks'])}, emails: {len(intel.get('emailAddresses', []))})."
     }
     
     try:
@@ -804,6 +836,13 @@ async def honeypot(
     # If session terminated or callback already sent, return closing response
     if session["callback_sent"] or session.get("state") == "terminated":
         logger.info(f"Session {session_id} already completed (state={session.get('state')})")
+        duration_seconds = int(time.time() - session.get("start_time", time.time()))
+        intel = session["extracted_intelligence"]
+        evidence_count = (
+            len(intel["upiIds"]) + len(intel["phoneNumbers"]) +
+            len(intel["bankAccounts"]) + len(intel["phishingLinks"]) +
+            len(intel.get("emailAddresses", []))
+        )
         return HoneypotResponse(
             status="success",
             reply="Thank you for calling. Goodbye.",
@@ -811,7 +850,15 @@ async def honeypot(
             scamDetected=session["scam_detected"],
             messagesExchanged=session["messages_exchanged"],
             callbackSent="Already sent",
-            extractedIntelligence=session["extracted_intelligence"]
+            extractedIntelligence=session["extracted_intelligence"],
+            engagementMetrics={
+                "totalMessagesExchanged": session["messages_exchanged"],
+                "engagementDurationSeconds": duration_seconds
+            },
+            agentNotes=(
+                f"Session completed. {session['messages_exchanged']} exchanges over {duration_seconds}s. "
+                f"Extracted {evidence_count} intelligence items. Final state: {session.get('state', 'terminated')}."
+            )
         )
     
     # Extract message text
@@ -884,6 +931,32 @@ async def honeypot(
         logger.info(f"Session {session_id} ending - state=terminated, triggering callback")
         callback_status = await send_callback(session_id, session)
     
+    # Build engagement metrics
+    duration_seconds = int(time.time() - session.get("start_time", time.time()))
+    engagement_metrics = {
+        "totalMessagesExchanged": session["messages_exchanged"],
+        "engagementDurationSeconds": duration_seconds
+    }
+    
+    # Build agent notes summary
+    intel = session["extracted_intelligence"]
+    evidence_count = (
+        len(intel["upiIds"]) +
+        len(intel["phoneNumbers"]) +
+        len(intel["bankAccounts"]) +
+        len(intel["phishingLinks"]) +
+        len(intel["emailAddresses"])
+    )
+    agent_notes = (
+        f"AI agent engaged suspected scammer for {session['messages_exchanged']} exchanges "
+        f"over {duration_seconds}s. Phase: {session.get('state', 'unknown')}. "
+        f"Scam detected: {session['scam_detected']}. "
+        f"Extracted {evidence_count} intelligence items "
+        f"(UPI: {len(intel['upiIds'])}, Phone: {len(intel['phoneNumbers'])}, "
+        f"Bank: {len(intel['bankAccounts'])}, Links: {len(intel['phishingLinks'])}, "
+        f"Email: {len(intel['emailAddresses'])})."
+    )
+    
     return HoneypotResponse(
         status="success",
         reply=reply,
@@ -891,7 +964,9 @@ async def honeypot(
         scamDetected=session["scam_detected"],
         messagesExchanged=session["messages_exchanged"],
         callbackSent=callback_status,
-        extractedIntelligence=session["extracted_intelligence"]
+        extractedIntelligence=session["extracted_intelligence"],
+        engagementMetrics=engagement_metrics,
+        agentNotes=agent_notes
     )
 
 @app.get("/api/session/{session_id}", tags=["Debug"])
