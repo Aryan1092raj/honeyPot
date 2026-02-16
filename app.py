@@ -106,6 +106,9 @@ if 'all_extracted' not in st.session_state:
         "upi_ids": [], "account_numbers": [],
         "ifsc_codes": [], "phone_numbers": [], "links": []
     }
+# Ensure current_strategy is always initialized
+if 'current_strategy' not in st.session_state:
+    st.session_state.current_strategy = None
 # Removed current_strategy and current_phase - internal metadata that shouldn't leak
 
 # ============================================================
