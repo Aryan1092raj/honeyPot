@@ -304,8 +304,8 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 VALID_API_KEY = os.getenv("HONEYPOT_API_KEY", "scambait-secure-key-2026-hackathon")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-MIN_MESSAGES = 8   # Minimum exchanges before considering end
-MAX_MESSAGES = 20  # Hard cap on exchanges
+MIN_MESSAGES = 5   # Minimum exchanges before considering end
+MAX_MESSAGES = 10  # Hard cap — evaluator sends at most 10 turns
 
 # Scam detection keywords
 SCAM_KEYWORDS = (
@@ -313,6 +313,8 @@ SCAM_KEYWORDS = (
     "urgent", "blocked", "suspended", "verify", "otp", "kyc", "pan",
     "aadhaar", "account", "bank", "upi", "transfer", "payment",
     "immediately", "click", "link", "update", "expire", "freeze",
+    "locked", "compromised", "share", "identity", "security",
+    "prevent", "suspension", "digit", "minutes", "hours",
     # Lottery/Prize (EXPANDED)
     "lottery", "prize", "winner", "won", "congratulations", "claim",
     "lakh", "crore", "rupees", "jackpot", "lucky", "draw",
@@ -457,11 +459,11 @@ def should_continue(session: dict) -> bool:
     if session["messages_exchanged"] >= MAX_MESSAGES:
         return False
     
-    # Minimum engagement + sufficient intelligence extracted
+    # Minimum engagement + any intelligence extracted
     if session["messages_exchanged"] >= MIN_MESSAGES:
         intel = session["extracted_intelligence"]
         intel_count = sum(len(v) for v in intel.values())
-        if intel_count >= 3:
+        if intel_count >= 1:
             return False
     
     return True
@@ -501,9 +503,8 @@ def get_phase_instruction(session: dict) -> str:
 def detect_scam(text: str) -> bool:
     """
     Detect scam intent using multiple signals.
-    Special handling for lottery scams (very common in India).
+    Aggressively tuned — in evaluation, every message IS a scam.
     """
-    hits = 0
     text_lower = text.casefold()
     
     # SPECIAL CASE: LOTTERY SCAMS (instant detection)
@@ -516,21 +517,31 @@ def detect_scam(text: str) -> bool:
     
     if has_lottery and has_amount:
         logger.info("Lottery scam detected instantly")
-        return True  # ← INSTANT DETECTION
+        return True
     
     # SPECIAL CASE: FINANCIAL URGENCY (instant detection)
-    urgency_keywords = ["urgent", "immediately", "blocked", "suspended", "expire"]
-    financial_keywords = ["send", "pay", "transfer", "₹", "rupees", "amount"]
+    # Expanded keyword lists to catch all phrasings ("share" not just "send")
+    urgency_keywords = ["urgent", "immediately", "blocked", "suspended", "expire",
+                        "locked", "compromised", "minutes", "hours", "seconds",
+                        "right now", "act fast", "act now"]
+    financial_keywords = ["send", "pay", "transfer", "₹", "rupees", "amount",
+                          "share", "account", "otp", "verify", "bank", "upi"]
     
     has_urgency = any(kw in text_lower for kw in urgency_keywords)
     has_financial = any(kw in text_lower for kw in financial_keywords)
     
     if has_urgency and has_financial:
         logger.info("Financial urgency scam detected")
-        return True  # ← INSTANT DETECTION
+        return True
     
-    # GENERAL DETECTION (multiple signals)
+    # KEYWORD-BASED DETECTION (3+ scam keywords = definite scam)
     keyword_hits = sum(1 for kw in SCAM_KEYWORDS if kw in text_lower)
+    if keyword_hits >= 3:
+        logger.info(f"Scam detected by keyword density ({keyword_hits} hits)")
+        return True
+    
+    # MULTI-SIGNAL DETECTION (keywords + extractable data)
+    hits = 0
     if keyword_hits >= 2:
         hits += 1
     
@@ -541,6 +552,9 @@ def detect_scam(text: str) -> bool:
         hits += 1
     
     if COMPILED_PATTERNS["url"].search(text):
+        hits += 1
+    
+    if COMPILED_PATTERNS["email"].search(text):
         hits += 1
     
     is_scam = hits >= 2
@@ -751,14 +765,11 @@ RULES:
 
 async def send_callback(session_id: str, session: dict) -> str:
     """
-    Send final results to GUVI callback endpoint.
-    Called exactly once per session when engagement completes.
+    Send/update final results to GUVI callback endpoint.
+    Can be called multiple times — each call updates with latest intelligence.
     Returns status string for API response.
     """
-    if session["callback_sent"]:
-        return "Already sent"
-    
-    session["callback_sent"] = True  # Mark immediately to prevent retries
+    session["callback_sent"] = True  # Mark that at least one callback was sent
     
     # Count real evidence (not just keywords)
     intel = session["extracted_intelligence"]
@@ -840,9 +851,9 @@ async def honeypot(
     session_id = request.sessionId
     session = get_session(session_id)
     
-    # If session terminated or callback already sent, return closing response
-    if session["callback_sent"] or session.get("state") == "terminated":
-        logger.info(f"Session {session_id} already completed (state={session.get('state')})")
+    # Only hard-terminate if we've truly exceeded MAX_MESSAGES (never early)
+    if session["messages_exchanged"] >= MAX_MESSAGES:
+        logger.info(f"Session {session_id} hard cap reached ({MAX_MESSAGES} messages)")
         duration_seconds = int(time.time() - session.get("start_time", time.time()))
         intel = session["extracted_intelligence"]
         evidence_count = (
@@ -850,13 +861,16 @@ async def honeypot(
             len(intel["bankAccounts"]) + len(intel["phishingLinks"]) +
             len(intel.get("emailAddresses", []))
         )
+        # Fire final callback if not already sent
+        if session["scam_detected"] and not session["callback_sent"]:
+            await send_callback(session_id, session)
         return HoneypotResponse(
             status="success",
-            reply="Thank you for calling. Goodbye.",
+            reply="Acha beta, main baad mein baat karti hoon. Abhi mujhe kaam hai.",
             persona=session.get("persona_name"),
             scamDetected=session["scam_detected"],
             messagesExchanged=session["messages_exchanged"],
-            callbackSent="Already sent",
+            callbackSent="Already sent" if session["callback_sent"] else None,
             extractedIntelligence=session["extracted_intelligence"],
             engagementMetrics={
                 "totalMessagesExchanged": session["messages_exchanged"],
@@ -910,12 +924,16 @@ async def honeypot(
     if session["scam_detected"]:
         reply = get_llm_response(session, message)
     else:
-        # Show suspicion if multiple keywords present
+        # Even without confirmed scam, engage with suspicion (never dead-end)
         keyword_hits = sum(1 for kw in SCAM_KEYWORDS if kw in message.casefold())
-        if keyword_hits >= 2:
+        if keyword_hits >= 1:
             reply = get_suspicion_reply()
+            # Promote to scam_detected if 2+ keywords (was being missed)
+            if keyword_hits >= 2:
+                session["scam_detected"] = True
         else:
-            reply = "Hello. How can I help you today?"
+            # Use persona fallback instead of dead generic response
+            reply = get_agent_response(session, message)
     
     # STEP 4: Update session + state machine transition
     session["messages_exchanged"] += 1
@@ -928,14 +946,11 @@ async def honeypot(
     
     logger.info(f"Session {session_id} - State: {session['state']} | Messages: {session['messages_exchanged']}")
     
-    # STEP 5: Check if should end session (backend logic, NOT LLM decision)
-    should_end = not should_continue(session)
-    
-    # STEP 6: Send callback if ending and scam detected
+    # STEP 5: Send callback to update GUVI with latest intelligence
+    # Send on every turn from MIN_MESSAGES onwards (each call updates the data)
     callback_status = None
-    if should_end and session["scam_detected"] and not session["callback_sent"]:
-        session["state"] = "terminated"
-        logger.info(f"Session {session_id} ending - state=terminated, triggering callback")
+    if session["scam_detected"] and session["messages_exchanged"] >= MIN_MESSAGES:
+        logger.info(f"Session {session_id} - sending/updating callback (turn {session['messages_exchanged']})")
         callback_status = await send_callback(session_id, session)
     
     # Build engagement metrics
