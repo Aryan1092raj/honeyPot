@@ -591,12 +591,13 @@ def extract_intelligence(text: str, session: dict) -> None:
             intel["phoneNumbers"].append(original)
             logger.info(f"Extracted phone (original format): {original}")
     
-    # Extract URLs
+    # Extract URLs (strip trailing punctuation that's part of surrounding sentence)
     url_matches = COMPILED_PATTERNS["url"].findall(text)
     for match in url_matches:
-        if match not in intel["phishingLinks"]:
-            intel["phishingLinks"].append(match)
-            logger.info(f"Extracted URL: {match}")
+        clean_url = match.rstrip('.,;:!?)')
+        if clean_url not in intel["phishingLinks"]:
+            intel["phishingLinks"].append(clean_url)
+            logger.info(f"Extracted URL: {clean_url}")
     
     # Extract bank accounts (10-18 digit numbers, excluding phones)
     acc_matches = COMPILED_PATTERNS["bank_account"].findall(text)
