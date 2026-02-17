@@ -44,7 +44,7 @@ from src.honeypot_agent import (
     sessions,
     transition_state,
 )
-from src.intelligence import extract_intelligence
+from src.intelligence import extract_intelligence, extract_intelligence_from_history
 from src.models import HoneypotRequest, HoneypotResponse, MessageField
 from src.scam_detection import detect_scam, identify_red_flags, identify_red_flags_detailed
 
@@ -323,16 +323,16 @@ async def honeypot(
     # Extract message text -----------------------------------------------
     message = _extract_message_text(request.message)
 
-    # Scan conversation history for intel --------------------------------
+    # Scan ALL conversation history turns aggressively for intel ----------
     if request.conversationHistory:
+        extract_intelligence_from_history(request.conversationHistory, session)
         for hist_msg in request.conversationHistory:
             if isinstance(hist_msg, dict):
-                text = hist_msg.get("text", "")
+                text = hist_msg.get("text", "") or hist_msg.get("content", "")
                 if text:
-                    extract_intelligence(text, session)
                     if not session["scam_detected"]:
                         session["scam_detected"] = detect_scam(text)
-                    # Red-flag accumulation
+                    # Red-flag accumulation from every turn
                     for flag in identify_red_flags(text):
                         if flag not in session["red_flags"]:
                             session["red_flags"].append(flag)
@@ -341,7 +341,7 @@ async def honeypot(
             for hist_msg in request.conversationHistory:
                 if isinstance(hist_msg, dict):
                     sender = hist_msg.get("sender", "scammer")
-                    text = hist_msg.get("text", "")
+                    text = hist_msg.get("text", "") or hist_msg.get("content", "")
                     if sender == "scammer":
                         session["conversation"].append({"scammer": text, "agent": "", "timestamp": datetime.now().isoformat()})
                     elif sender == "user":

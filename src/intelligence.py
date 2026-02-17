@@ -20,6 +20,20 @@ import re
 from src.config import COMPILED_PATTERNS, SCAM_KEYWORDS, logger
 
 
+def extract_intelligence_from_history(conversation_history: list, session: dict) -> None:
+    """
+    Aggressively scan ALL conversation history turns for intelligence.
+    Extracts from both scammer and user messages.
+    """
+    if not conversation_history:
+        return
+    for msg in conversation_history:
+        if isinstance(msg, dict):
+            text = msg.get("text", "") or msg.get("content", "")
+            if text:
+                extract_intelligence(text, session)
+
+
 def extract_intelligence(text: str, session: dict) -> None:
     """
     Extract actionable intelligence from *text* and store in *session*.

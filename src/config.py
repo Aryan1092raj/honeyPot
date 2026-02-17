@@ -170,17 +170,20 @@ NAIVE_RESPONSES: tuple[str, ...] = (
     "Haan ji? Kaun bol raha hai? Aapka phone number kya hai... main call back karungi verify karne ke liye?",
     "Arey arey... blocked matlab? Aap pakka bank se ho? Aapka direct number do na, main khud call karungi.",
     # Phase 2: Ask for UPI ID and ACCOUNT NUMBER
-    "Acha acha... par kahan bhejoon paisa? Woh UPI ID phir se bolo na slowly... likhti hoon...",
-    "Account number chahiye aapko? Woh passbook mein likha hai... par aapka account number kya hai? Main transfer kar doongi.",
+    "Acha acha... par kahan bhejoon paisa? Woh UPI ID phir se bolo na slowly... likhti hoon... @ ke baad kya aata hai?",
+    "Account number chahiye aapko? Woh passbook mein likha hai... par pehle aapka account number bolo jismein bhejoon? IFSC code bhi dena.",
     # Phase 3: Ask for LINK and EMAIL
-    "Woh link wala message bhejo na phir se... phone pe chhota likha hai, dikha nahi raha...",
-    "Email pe bhej do details beta... mera beta padhega. Aapka email ID kya hai?",
-    # Phase 4: Repeat intelligence probes
-    "Haan haan main bhejti hoon... par UPI ID kya tha aapka? Woh @ wala phir se bolo na?",
-    "Aap branch ka phone number do na... main khud call karke confirm karti hoon. Landline number hoga na?",
-    # Phase 5: Deeper probing
-    "Theek hai theek hai... aapka website kya hai? Link bhejo na WhatsApp pe, main check karti hoon.",
-    "Padosan bol rahi thi fraud hota hai aajkal... aapka official email bhejo, mera beta verify karega.",
+    "Woh link wala message phir se bhejo... phone pe chhota likha hai dikha nahi. Pura URL bolo na http se?",
+    "Email pe bhej do details beta... mera beta padhega. Aapka email ID kya hai? Gmail hai ya office wala?",
+    # Phase 4: Repeat intelligence probes (multi-ask)
+    "Haan haan main bhejti hoon... par UPI ID kya tha aapka? Woh @ wala phir se bolo na? Aur phone number bhi do backup ke liye.",
+    "Aap branch ka phone number do na... landline hoga na? Aur woh website ka link bhi bhejo, main beta se check karwaungi.",
+    # Phase 5: Deeper probing (ask for everything missing)
+    "Theek hai... aapka website kya hai? Link bhejo WhatsApp pe. Aur email bhi do, main documents forward karungi.",
+    "Padosan fraud fraud bol rahi thi... aapka official email bhejo, phone number do, aur UPI ID bhi — mera beta sab verify karega.",
+    # Phase 6: Extra aggressive probing rounds
+    "Main confuse ho gayi... ek kaam karo — apna phone number, UPI ID, aur bank account number sab ek saath bol do. Main likh leti hoon.",
+    "Arey sun nahi paya... woh link phir se bolo? Aur email pe bhi bhej do. Mera beta aayega toh check karega.",
 )
 
 # ============================================================

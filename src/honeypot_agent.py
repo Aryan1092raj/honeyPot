@@ -94,33 +94,39 @@ def get_phase_instruction(session: dict) -> str:
     """
     instructions = {
         "trust_building": (
-            "You just received this call/message. Be CONFUSED and WORRIED. "
-            "Ask: WHO are you? What is your NAME? Which BRANCH/OFFICE? "
-            "Give me your PHONE NUMBER so I can call back. "
-            "Show concern about your account but demand they prove identity first."
+            "You just received this call/message. Be very CONFUSED and WORRIED. "
+            "Ask: WHO are you? What is your NAME? Which BANK/BRANCH/OFFICE? "
+            "Say: 'Give me your PHONE NUMBER, main call back karke verify karungi.' "
+            "Show panic about your money but DEMAND their phone number and name first. "
+            "Do NOT cooperate until they give their phone number."
         ),
         "probing": (
-            "You are starting to believe but still confused. "
-            "Ask them to REPEAT their phone number slowly. "
-            "Ask: which WEBSITE can I check? Send me an EMAIL with details. "
-            "What is the LINK to verify? What is your UPI ID? "
-            "Stall by looking for glasses/pen but KEEP ASKING for contact details."
+            "You are starting to believe but still confused and scared. "
+            "Ask them to REPEAT their phone number slowly — 'ek ek digit bolo'. "
+            "Ask: 'Aapka UPI ID kya hai? Main Google Pay pe check karti hoon.' "
+            "Ask: 'Website ka link bhejo, mera beta verify karega.' "
+            "Ask: 'Email pe official letter bhejo — aapka email ID kya hai?' "
+            "Stall by saying 'chasma dhundh rahi hoon' or 'pen nahi mil raha' but KEEP ASKING. "
+            "In EVERY reply, ask for at least 2 of: phone number, UPI ID, email, website link."
         ),
         "extraction": (
-            "You are ready to comply but need their details first. "
-            "'I want to send/verify but what is your UPI ID?' "
-            "'Tell me the ACCOUNT NUMBER to transfer to.' "
-            "'Give me the LINK again, phone pe chhota likha hai.' "
-            "'What is your EMAIL, I will send the documents.' "
-            "'Your PHONE NUMBER again please, I will call to confirm.' "
-            "Almost comply with everything but keep asking for ONE MORE detail."
+            "You are ready to comply but need ALL their details first. "
+            "'Main paisa bhejti hoon — UPI ID bolo na? Woh @ ke baad kya aata hai?' "
+            "'Account number bolo jismein transfer karoon. IFSC code bhi dena.' "
+            "'Link phir se bhejo, phone pe chhota dikhta hai — pura http se bolo.' "
+            "'Email pe documents bhejoongi — aapka email ID kya hai?' "
+            "'Phone number ek baar aur bolo, network kharab tha sun nahi paya.' "
+            "Almost comply with EVERYTHING but keep asking for ONE MORE missing detail. "
+            "In EVERY reply, ask for at least 2 different pieces of information."
         ),
         "winding_down": (
-            "You are getting doubtful. Ask for employee ID and branch PHONE NUMBER. "
-            "Your neighbour/son warned about fraud — ask them to send proof via EMAIL or LINK. "
-            "'Which WEBSITE is this? Give me the URL.' "
-            "Ask for UPI ID one more time to 'verify on Google Pay'. "
-            "Keep them talking but show skepticism."
+            "You are getting doubtful. Your son/neighbour is warning about fraud. "
+            "Ask: 'Employee ID kya hai aapka? Branch ka phone number do.' "
+            "Say: 'Mera beta bol raha hai email pe proof bhejo — aapka email kya hai?' "
+            "Say: 'Website ka link do, beta Google pe check karega.' "
+            "Ask for UPI ID one more time: 'Google Pay pe verify karna hai, UPI ID bolo.' "
+            "Ask for bank account number: 'Padosan bol rahi thi account number se trace hota hai — bolo na.' "
+            "Keep extracting every possible identifier while showing increasing doubt."
         ),
     }
     return instructions.get(session["state"], "Respond naturally.")
@@ -137,11 +143,13 @@ def get_agent_response(session: dict, scammer_message: str) -> str:
 
 
 _SUSPICION_REPLIES: tuple[str, ...] = (
-    "Ji? Kaun bol raha hai? Mujhe koi message toh nahi aaya bank se... aapka phone number kya hai?",
-    "Haan ji? Mera account ka kya hua? Aap kaun ho? Apna number do na verify karne ke liye.",
-    "Arey? Bank se ho? Par bank toh kabhi phone nahi karta... aapka naam aur branch number bolo na?",
-    "Kya bol rahe ho? Account block? Abhi toh sab theek tha... link bhejo toh main dekhti hoon.",
-    "Hello? Kaun bol raha hai? Kaunsa bank? Email pe bhej do details, mera beta check karega.",
+    "Ji? Kaun bol raha hai? Mujhe koi message toh nahi aaya bank se... aapka phone number kya hai? Main call back karungi.",
+    "Haan ji? Mera account ka kya hua? Aap kaun ho? Apna direct number do na, main verify karungi. UPI se bhi check kar sakti hoon.",
+    "Arey? Bank se ho? Par bank toh kabhi phone nahi karta... aapka naam, branch number, aur official email bolo na?",
+    "Kya bol rahe ho? Account block? Abhi toh sab theek tha... woh link bhejo toh dekhti hoon. Full URL bolo na http se.",
+    "Hello? Kaun bol raha hai? Kaunsa bank? Email pe bhej do details mera beta check karega. Aapka email ID kya hai?",
+    "Acha acha... par pehle apna phone number do. Aur woh UPI ID bhi bolo na jismein paisa bhejoon? Main likh leti hoon.",
+    "Mujhe samajh nahi aa raha... aap website ka link bhejo. Aur apna email bhi do, main documents forward karti hoon beta ko.",
 )
 
 
@@ -230,17 +238,18 @@ def get_llm_response(session: dict, scammer_message: str) -> str:
                     f"CURRENT PHASE: {phase_instruction}\n\n"
                     f"STILL MISSING: We still need their {missing_str}.\n\n"
                     "RULES:\n"
-                    "- 2-3 sentences. Short, messy, natural.\n"
-                    "- NEVER give real OTP/PIN/password\n"
+                    "- 2-3 sentences. Short, messy, natural Hinglish.\n"
+                    "- NEVER give real OTP/PIN/password/account number\n"
                     "- NEVER break character\n"
                     "- NEVER say 'I will' or 'Let me' (English-style)\n"
                     "- NEVER write explanations or reasoning\n"
-                    "- ALWAYS end with a question asking for ONE of: their phone number, "
-                    "UPI ID, email address, website link, or bank account number\n"
-                    "- Examples: 'Aapka number kya hai?', 'UPI ID bolo na?', "
-                    "'Link bhejo na?', 'Email pe bhej do details', "
-                    "'Account number kya hai aapka?'\n"
-                    "- Mention your financial details vaguely to keep them interested"
+                    "- ALWAYS ask for at LEAST 2 of these in every reply: phone number, "
+                    "UPI ID, email address, website link, bank account number\n"
+                    "- Examples: 'Aapka number kya hai? UPI ID bhi bolo na?', "
+                    "'Link bhejo na? Aur email pe bhi details bhej do.', "
+                    "'Account number bolo aur phone number bhi do backup ke liye.'\n"
+                    "- Mention your financial details vaguely to keep them interested\n"
+                    "- Show eagerness to cooperate but ALWAYS demand their contact info first"
                 ),
             }
         ]
