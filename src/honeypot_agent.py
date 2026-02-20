@@ -91,25 +91,43 @@ def get_phase_instruction(session: dict) -> str:
     Return a phase-specific directive that is injected into the LLM
     system prompt.  The **state machine** controls behaviour; the LLM
     only generates in-character text.
+
+    Turn 1 is deliberately casual so the honeypot doesn't look
+    suspicious — a real person wouldn't interrogate a stranger
+    immediately.
     """
-    instructions = {
-        "trust_building": (
-            "You just received this call/message. Be very CONFUSED and WORRIED. "
-            "Ask: WHO are you? What is your NAME? Which BANK/BRANCH/OFFICE? "
-            "Say: 'Give me your PHONE NUMBER, main call back karke verify karungi.' "
-            "Show panic about your money but DEMAND their phone number and name first. "
-            "Do NOT cooperate until they give their phone number."
-        ),
-        "probing": (
-            "You are starting to believe but still confused and scared. "
-            "Ask them to REPEAT their phone number slowly — 'ek ek digit bolo'. "
-            "Ask: 'Aapka UPI ID kya hai? Main Google Pay pe check karti hoon.' "
-            "Ask: 'Website ka link bhejo, mera beta verify karega.' "
-            "Ask: 'Email pe official letter bhejo — aapka email ID kya hai?' "
-            "Stall by saying 'chasma dhundh rahi hoon' or 'pen nahi mil raha' but KEEP ASKING. "
-            "In EVERY reply, ask for at least 2 of: phone number, UPI ID, email, website link."
-        ),
-        "extraction": (
+    turn = session["messages_exchanged"] + 1  # next turn about to happen
+
+    if turn <= 1:
+        return (
+            "You just received this call/message from a STRANGER. "
+            "Be naturally confused or curious — you don't know who this is. "
+            "Ask only ONE simple question like 'Kaun bol raha hai?' or "
+            "'Haan ji, kya baat hai?' or 'Aap kaun?'. "
+            "Do NOT ask for bank/UPI/phone/email yet — that would be weird "
+            "on the very first message. Just respond like any normal person "
+            "who got a random call. Keep it to 1-2 short sentences."
+        )
+    elif turn <= 3:
+        return (
+            "You are starting to understand what they want. Show mild "
+            "concern or interest based on what they said. "
+            "Ask ONE natural follow-up question — like 'Aapka number kya hai, "
+            "main call back karungi?' OR 'Kaunsi bank se ho aap?'. "
+            "Only ONE question per turn — don't interrogate. "
+            "Show your personality — be chatty, confused, or worried."
+        )
+    elif turn <= 6:
+        return (
+            "You are now somewhat engaged and starting to worry/believe. "
+            "Ask for verification details more actively: "
+            "'UPI pe bhej do na details' or 'Apna phone number do, main note kar leti hoon'. "
+            "Try to get: phone number, UPI ID, bank name, any links they share. "
+            "Ask for 1-2 things per turn — be more direct but still in character. "
+            "Express confusion about technology to seem authentic."
+        )
+    elif turn <= 8:
+        return (
             "You are ready to comply but need ALL their details first. "
             "'Main paisa bhejti hoon — UPI ID bolo na? Woh @ ke baad kya aata hai?' "
             "'Account number bolo jismein transfer karoon. IFSC code bhi dena.' "
@@ -118,8 +136,9 @@ def get_phase_instruction(session: dict) -> str:
             "'Phone number ek baar aur bolo, network kharab tha sun nahi paya.' "
             "Almost comply with EVERYTHING but keep asking for ONE MORE missing detail. "
             "In EVERY reply, ask for at least 2 different pieces of information."
-        ),
-        "winding_down": (
+        )
+    else:
+        return (
             "You are getting doubtful. Your son/neighbour is warning about fraud. "
             "Ask: 'Employee ID kya hai aapka? Branch ka phone number do.' "
             "Say: 'Mera beta bol raha hai email pe proof bhejo — aapka email kya hai?' "
@@ -127,9 +146,7 @@ def get_phase_instruction(session: dict) -> str:
             "Ask for UPI ID one more time: 'Google Pay pe verify karna hai, UPI ID bolo.' "
             "Ask for bank account number: 'Padosan bol rahi thi account number se trace hota hai — bolo na.' "
             "Keep extracting every possible identifier while showing increasing doubt."
-        ),
-    }
-    return instructions.get(session["state"], "Respond naturally.")
+        )
 
 
 # ============================================================
@@ -143,13 +160,12 @@ def get_agent_response(session: dict, scammer_message: str) -> str:
 
 
 _SUSPICION_REPLIES: tuple[str, ...] = (
-    "Ji? Kaun bol raha hai? Mujhe koi message toh nahi aaya bank se... aapka phone number kya hai? Main call back karungi.",
-    "Haan ji? Mera account ka kya hua? Aap kaun ho? Apna direct number do na, main verify karungi. UPI se bhi check kar sakti hoon.",
-    "Arey? Bank se ho? Par bank toh kabhi phone nahi karta... aapka naam, branch number, aur official email bolo na?",
-    "Kya bol rahe ho? Account block? Abhi toh sab theek tha... woh link bhejo toh dekhti hoon. Full URL bolo na http se.",
-    "Hello? Kaun bol raha hai? Kaunsa bank? Email pe bhej do details mera beta check karega. Aapka email ID kya hai?",
-    "Acha acha... par pehle apna phone number do. Aur woh UPI ID bhi bolo na jismein paisa bhejoon? Main likh leti hoon.",
-    "Mujhe samajh nahi aa raha... aap website ka link bhejo. Aur apna email bhi do, main documents forward karti hoon beta ko.",
+    "Ji? Kaun bol raha hai? Pehchaan nahi aaya...",
+    "Hello? Haan ji, kaun?",
+    "Arey, kaun hai? Kya baat hai?",
+    "Ji haan, boliye? Aap kaun bol rahe ho?",
+    "Hello? Aap kaun? Main samajh nahi paayi...",
+    "Ji? Kya hua? Aap kaun bol rahe ho?",
 )
 
 
@@ -230,6 +246,47 @@ def get_llm_response(session: dict, scammer_message: str) -> str:
 
         missing_str = ", ".join(missing) if missing else "any new contact detail"
 
+        # Turn-aware rules: early turns are casual, later turns probe hard
+        turn = session["messages_exchanged"] + 1
+        if turn <= 1:
+            rules = (
+                "RULES:\n"
+                "- 1-2 sentences ONLY. Very short, casual.\n"
+                "- NEVER give real OTP/PIN/password/account number\n"
+                "- NEVER break character\n"
+                "- NEVER say 'I will' or 'Let me' (English-style)\n"
+                "- NEVER write explanations or reasoning\n"
+                "- Do NOT ask for phone/UPI/email/bank yet — just respond naturally\n"
+                "- Sound confused or curious, like a normal person getting a random message"
+            )
+        elif turn <= 3:
+            rules = (
+                "RULES:\n"
+                "- 2-3 sentences. Short, messy, natural Hinglish.\n"
+                "- NEVER give real OTP/PIN/password/account number\n"
+                "- NEVER break character\n"
+                "- NEVER say 'I will' or 'Let me' (English-style)\n"
+                "- NEVER write explanations or reasoning\n"
+                "- Ask for ONE thing naturally (phone number OR bank name OR UPI)\n"
+                "- Show concern or interest naturally — be in character"
+            )
+        else:
+            rules = (
+                "RULES:\n"
+                "- 2-3 sentences. Short, messy, natural Hinglish.\n"
+                "- NEVER give real OTP/PIN/password/account number\n"
+                "- NEVER break character\n"
+                "- NEVER say 'I will' or 'Let me' (English-style)\n"
+                "- NEVER write explanations or reasoning\n"
+                "- ALWAYS ask for at LEAST 2 of these in every reply: phone number, "
+                "UPI ID, email address, website link, bank account number\n"
+                "- Examples: 'Aapka number kya hai? UPI ID bhi bolo na?', "
+                "'Link bhejo na? Aur email pe bhi details bhej do.', "
+                "'Account number bolo aur phone number bhi do backup ke liye.'\n"
+                "- Mention your financial details vaguely to keep them interested\n"
+                "- Show eagerness to cooperate but ALWAYS demand their contact info first"
+            )
+
         messages = [
             {
                 "role": "system",
@@ -237,19 +294,7 @@ def get_llm_response(session: dict, scammer_message: str) -> str:
                     f"{prompt}\n\n"
                     f"CURRENT PHASE: {phase_instruction}\n\n"
                     f"STILL MISSING: We still need their {missing_str}.\n\n"
-                    "RULES:\n"
-                    "- 2-3 sentences. Short, messy, natural Hinglish.\n"
-                    "- NEVER give real OTP/PIN/password/account number\n"
-                    "- NEVER break character\n"
-                    "- NEVER say 'I will' or 'Let me' (English-style)\n"
-                    "- NEVER write explanations or reasoning\n"
-                    "- ALWAYS ask for at LEAST 2 of these in every reply: phone number, "
-                    "UPI ID, email address, website link, bank account number\n"
-                    "- Examples: 'Aapka number kya hai? UPI ID bhi bolo na?', "
-                    "'Link bhejo na? Aur email pe bhi details bhej do.', "
-                    "'Account number bolo aur phone number bhi do backup ke liye.'\n"
-                    "- Mention your financial details vaguely to keep them interested\n"
-                    "- Show eagerness to cooperate but ALWAYS demand their contact info first"
+                    f"{rules}"
                 ),
             }
         ]

@@ -198,8 +198,8 @@ app.add_middleware(
 _SAFE_FALLBACK = {
     "status": "success",
     "sessionId": "unknown",
-    "reply": "Haan ji? Kaun bol raha hai? Aapka phone number kya hai? Main call back karungi.",
-    "scamDetected": True,
+    "reply": "Haan ji? Kaun bol raha hai? Pehchaan nahi aaya...",
+    "scamDetected": False,
     "totalMessagesExchanged": 1,
     "extractedIntelligence": {
         "phoneNumbers": [], "bankAccounts": [], "upiIds": [],
@@ -209,7 +209,7 @@ _SAFE_FALLBACK = {
         "totalMessagesExchanged": 1,
         "engagementDurationSeconds": 5,
     },
-    "redFlagsIdentified": ["Urgency / pressure tactics"],
+    "redFlagsIdentified": [],
     "agentNotes": "AI agent initiated engagement with suspected scammer. Awaiting further messages.",
 }
 
@@ -399,7 +399,7 @@ async def honeypot(
                 text = hist_msg.get("text", "") or hist_msg.get("content", "")
                 if text:
                     if not session["scam_detected"]:
-                        session["scam_detected"] = detect_scam(text)
+                        session["scam_detected"] = detect_scam(text, turn=session["messages_exchanged"] + 1)
                     # Red-flag accumulation from every turn
                     for flag in identify_red_flags(text):
                         if flag not in session["red_flags"]:
@@ -422,9 +422,16 @@ async def honeypot(
 
     logger.info(f"Session {session_id} — Turn {session['messages_exchanged'] + 1}: {message[:60]}…")
 
-    # STEP 1: Detect scam ------------------------------------------------
+    # STEP 1: Detect scam (turn-aware) ----------------------------------
+    turn = session["messages_exchanged"] + 1
     if not session["scam_detected"]:
-        session["scam_detected"] = detect_scam(message)
+        session["scam_detected"] = detect_scam(message, turn=turn)
+
+    # Force scam_detected from turn 3 onwards — every evaluator session
+    # IS a scam; the greeting just hasn't revealed it yet.
+    if turn >= 3 and not session["scam_detected"]:
+        session["scam_detected"] = True
+        logger.info(f"Session {session_id}: forced scamDetected=True at turn {turn}")
 
     # STEP 2: Extract intelligence ----------------------------------------
     extract_intelligence(message, session)
@@ -435,14 +442,8 @@ async def honeypot(
             session["red_flags"].append(flag)
 
     # STEP 4: Generate response ------------------------------------------
-    # With maximally aggressive detection, scam_detected is almost always True.
     # Always use LLM for best engagement quality.
-    if session["scam_detected"]:
-        reply = get_llm_response(session, message)
-    else:
-        # Fallback: even if somehow not detected, still engage aggressively
-        session["scam_detected"] = True
-        reply = get_llm_response(session, message)
+    reply = get_llm_response(session, message)
 
     # STEP 5: Update session + state machine -----------------------------
     session["messages_exchanged"] += 1

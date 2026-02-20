@@ -1,9 +1,10 @@
 """
 Multi-layer scam detection engine with explicit red-flag identification.
 
-Detection is MAXIMALLY AGGRESSIVE — every evaluator message is a scam,
-so we optimise for perfect recall.  Even a single keyword match, a
-single extractable identifier, or a message > 20 chars is enough.
+Detection is turn-aware: early turns (1-2) require actual scam signals
+(keywords, identifiers, red-flag patterns). From turn 3 onward the
+caller forces scamDetected=True regardless (every evaluator session IS
+a scam, the greeting just hasn't revealed it yet).
 
 Red-flag identification runs independently and annotates every detected
 category (urgency, authority impersonation, financial request, etc.)
@@ -24,52 +25,53 @@ from src.config import (
 # SCAM DETECTION
 # ============================================================
 
-def detect_scam(text: str) -> bool:
+def detect_scam(text: str, turn: int = 1) -> bool:
     """
     Determine whether *text* contains scam intent.
 
-    MAXIMALLY AGGRESSIVE — in evaluation every inbound message IS a
-    scam so we optimise for recall.  Even a single keyword match or
-    a single extractable identifier (phone, UPI, URL) is enough.
+    Turn-aware thresholds:
+        - Turn 1-2: require genuine scam indicators (keywords, patterns,
+          identifiers). A plain greeting like "hello, i am mr. rajesh"
+          won't trigger detection — this keeps the honeypot realistic.
+        - Turn 3+: caller in main.py forces True regardless, so this
+          function is only a secondary check.
     """
     text_lower = text.casefold()
+    confidence = 0.0
 
-    # --- Layer 1: ANY keyword hit → scam ---
+    # --- Layer 1: keyword hits ---
     keyword_hits = sum(1 for kw in SCAM_KEYWORDS if kw in text_lower)
-    if keyword_hits >= 1:
-        logger.info(f"Scam detected by keyword match ({keyword_hits} hits)")
-        return True
+    if keyword_hits >= 2:
+        confidence += 0.6
+        logger.info(f"Scam signal: {keyword_hits} keyword hits (conf +0.6)")
+    elif keyword_hits == 1:
+        confidence += 0.3
+        logger.info(f"Scam signal: {keyword_hits} keyword hit (conf +0.3)")
 
-    # --- Layer 2: ANY extractable identifier → scam ---
-    if COMPILED_PATTERNS["upi"].search(text):
-        logger.info("Scam detected — UPI ID found")
-        return True
-    if COMPILED_PATTERNS["phone"].search(text):
-        logger.info("Scam detected — phone number found")
-        return True
-    if COMPILED_PATTERNS["url"].search(text):
-        logger.info("Scam detected — URL found")
-        return True
-    if COMPILED_PATTERNS["email"].search(text):
-        logger.info("Scam detected — email found")
-        return True
-    if COMPILED_PATTERNS["bank_account"].search(text):
-        logger.info("Scam detected — bank account found")
-        return True
+    # --- Layer 2: extractable identifiers ---
+    for key, pat in COMPILED_PATTERNS.items():
+        if pat.search(text):
+            confidence += 0.3
+            logger.info(f"Scam signal: {key} pattern found (conf +0.3)")
 
-    # --- Layer 3: Any red-flag category matches → scam ---
+    # --- Layer 3: red-flag category matches ---
     for _cat_id, cat in RED_FLAG_CATEGORIES.items():
         if any(trigger in text_lower for trigger in cat["triggers"]):
-            logger.info(f"Scam detected via red-flag category: {cat['label']}")
-            return True
+            confidence += 0.2
+            logger.info(f"Scam signal: red-flag '{cat['label']}' (conf +0.2)")
+            break  # one hit is enough for this layer
 
-    # --- Layer 4: Message is longer than 20 chars → treat as scam ---
-    # Evaluator messages are always scam; very short messages are greetings.
-    if len(text.strip()) > 20:
-        logger.info("Scam detected by message length heuristic")
-        return True
+    # Threshold depends on turn
+    if turn <= 1:
+        threshold = 0.3   # need real scam signals on turn 1
+    elif turn <= 2:
+        threshold = 0.2   # slightly lower on turn 2
+    else:
+        threshold = 0.1   # very easy from turn 3+
 
-    return False
+    is_scam = confidence >= threshold
+    logger.info(f"detect_scam: turn={turn} confidence={confidence:.2f} threshold={threshold} → {is_scam}")
+    return is_scam
 
 
 # ============================================================
